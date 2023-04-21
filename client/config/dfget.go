@@ -100,6 +100,15 @@ type ClientOption struct {
 	// LogDir is log directory of dfget.
 	LogDir string `yaml:"logDir,omitempty" mapstructure:"logDir,omitempty"`
 
+	// The maximum size in megabytes of the log file before it gets rotated.
+	LogRotateMaxSize int `yaml:"logRotateMaxSize" mapstructure:"logRotateMaxSize"`
+
+	// The maximum number of old log files to retain.
+	LogRotateMaxBackups int `yaml:"logRotateMaxBackups" mapstructure:"logRotateMaxBackups"`
+
+	// The maximum number of days to retain old log files based on the timestamp encoded in their filename.
+	LogRotateMaxAge int `yaml:"logRotateMaxAge" mapstructure:"logRotateMaxAge"`
+
 	// WorkHome is working directory of dfget.
 	WorkHome string `yaml:"workHome,omitempty" mapstructure:"workHome,omitempty"`
 
@@ -161,6 +170,18 @@ func (cfg *ClientOption) Validate() error {
 
 	if err := cfg.checkHeader(); err != nil {
 		return fmt.Errorf("output %s: %w", err.Error(), dferrors.ErrInvalidHeader)
+	}
+
+	if cfg.LogRotateMaxSize <= 0 {
+		return fmt.Errorf("logRotateMaxSize must be greater than 0")
+	}
+
+	if cfg.LogRotateMaxBackups <= 0 {
+		return fmt.Errorf("logRotateMaxBackups must be greater than 0")
+	}
+
+	if cfg.LogRotateMaxAge <= 0 {
+		return fmt.Errorf("logRotateMaxAge must be greater than 0")
 	}
 
 	if int64(cfg.RateLimit.Limit) < DefaultMinRate.ToNumber() {

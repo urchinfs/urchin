@@ -7,6 +7,9 @@ server:
   workHome: foo
   cacheDir: foo
   logDir: foo
+  logRotateMaxSize: 1024
+  logRotateMaxBackups: 20
+  logRotateMaxAge: 7
   pluginDir: foo
   dataDir: foo
 

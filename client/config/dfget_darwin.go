@@ -23,13 +23,18 @@ import (
 
 	"d7y.io/dragonfly/v2/client/util"
 	"d7y.io/dragonfly/v2/pkg/unit"
+
+	logger "d7y.io/dragonfly/v2/internal/dflog"
 )
 
 var dfgetConfig = ClientOption{
-	URL:           "",
-	Output:        "",
-	Timeout:       0,
-	BenchmarkRate: 128 * unit.KB,
+	URL:                 "",
+	Output:              "",
+	LogRotateMaxSize:    logger.DefaultRotateMaxSize,
+	LogRotateMaxBackups: logger.DefaultRotateMaxBackups,
+	LogRotateMaxAge:     logger.DefaultRotateMaxAge,
+	Timeout:             0,
+	BenchmarkRate:       128 * unit.KB,
 	RateLimit: util.RateLimit{
 		Limit: rate.Limit(DefaultTotalDownloadLimit),
 	},

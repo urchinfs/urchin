@@ -22,12 +22,17 @@ import (
 	"golang.org/x/time/rate"
 
 	"d7y.io/dragonfly/v2/client/util"
+
+	logger "d7y.io/dragonfly/v2/internal/dflog"
 )
 
 var dfgetConfig = ClientOption{
-	URL:     "",
-	Output:  "",
-	Timeout: 0,
+	URL:                 "",
+	Output:              "",
+	LogRotateMaxSize:    logger.DefaultRotateMaxSize,
+	LogRotateMaxBackups: logger.DefaultRotateMaxBackups,
+	LogRotateMaxAge:     logger.DefaultRotateMaxAge,
+	Timeout:             0,
 	RateLimit: util.RateLimit{
 		Limit: rate.Limit(DefaultTotalDownloadLimit),
 	},

@@ -28,6 +28,8 @@ import (
 	"d7y.io/dragonfly/v2/pkg/rpc"
 	"d7y.io/dragonfly/v2/pkg/slices"
 	"d7y.io/dragonfly/v2/pkg/types"
+
+	logger "d7y.io/dragonfly/v2/internal/dflog"
 )
 
 type Config struct {
@@ -71,6 +73,15 @@ type ServerConfig struct {
 
 	// Server log directory.
 	LogDir string `yaml:"logDir" mapstructure:"logDir"`
+
+	// The maximum size in megabytes of the log file before it gets rotated.
+	LogRotateMaxSize int `yaml:"logRotateMaxSize" mapstructure:"logRotateMaxSize"`
+
+	// The maximum number of old log files to retain.
+	LogRotateMaxBackups int `yaml:"logRotateMaxBackups" mapstructure:"logRotateMaxBackups"`
+
+	// The maximum number of days to retain old log files based on the timestamp encoded in their filename.
+	LogRotateMaxAge int `yaml:"logRotateMaxAge" mapstructure:"logRotateMaxAge"`
 
 	// Server plugin directory.
 	PluginDir string `yaml:"pluginDir" mapstructure:"pluginDir"`
@@ -338,7 +349,10 @@ type NetworkConfig struct {
 func New() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Name: DefaultServerName,
+			Name:                DefaultServerName,
+			LogRotateMaxSize:    logger.DefaultRotateMaxSize,
+			LogRotateMaxBackups: logger.DefaultRotateMaxBackups,
+			LogRotateMaxAge:     logger.DefaultRotateMaxAge,
 			GRPC: GRPCConfig{
 				AdvertisePort: DefaultGRPCAdvertisePort,
 				PortRange: TCPListenPortRange{
@@ -414,6 +428,18 @@ func New() *Config {
 func (cfg *Config) Validate() error {
 	if cfg.Server.Name == "" {
 		return errors.New("server requires parameter name")
+	}
+
+	if cfg.Server.LogRotateMaxSize <= 0 {
+		return errors.New("server parameter logRotateMaxSize must be greater than 0")
+	}
+
+	if cfg.Server.LogRotateMaxBackups <= 0 {
+		return errors.New("server parameter logRotateMaxBackups must be greater than 0")
+	}
+
+	if cfg.Server.LogRotateMaxAge <= 0 {
+		return errors.New("server parameter logRotateMaxAge must be greater than 0")
 	}
 
 	if cfg.Server.GRPC.AdvertiseIP == nil {

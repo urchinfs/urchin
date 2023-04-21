@@ -45,5 +45,5 @@ func SetupDaemon(logDir string, verbose bool, console bool) error {
 		return err
 	}
 
-	return logger.InitDaemon(verbose, console, d.LogDir())
+	return logger.InitDaemon(verbose, console, d.LogDir(), logger.DefaultRotateMaxSize, logger.DefaultRotateMaxBackups, logger.DefaultRotateMaxAge)
 }

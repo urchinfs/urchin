@@ -33,7 +33,7 @@ type logInitMeta struct {
 	setLoggerFunc        func(log *zap.Logger)
 }
 
-func InitManager(verbose, console bool, dir string) error {
+func InitManager(verbose, console bool, dir string, logMaxSize, logMaxBackups, logMaxAge int) error {
 	if console {
 		return createConsoleLogger(verbose)
 	}
@@ -63,10 +63,10 @@ func InitManager(verbose, console bool, dir string) error {
 		},
 	}
 
-	return createFileLogger(verbose, meta, logDir)
+	return createFileLogger(verbose, meta, logDir, logMaxSize, logMaxBackups, logMaxAge)
 }
 
-func InitScheduler(verbose, console bool, dir string) error {
+func InitScheduler(verbose, console bool, dir string, logMaxSize, logMaxBackups, logMaxAge int) error {
 	if console {
 		return createConsoleLogger(verbose)
 	}
@@ -92,10 +92,10 @@ func InitScheduler(verbose, console bool, dir string) error {
 		},
 	}
 
-	return createFileLogger(verbose, meta, logDir)
+	return createFileLogger(verbose, meta, logDir, logMaxSize, logMaxBackups, logMaxAge)
 }
 
-func InitDaemon(verbose, console bool, dir string) error {
+func InitDaemon(verbose, console bool, dir string, logMaxSize, logMaxBackups, logMaxAge int) error {
 	if console {
 		return createConsoleLogger(verbose)
 	}
@@ -121,10 +121,10 @@ func InitDaemon(verbose, console bool, dir string) error {
 		},
 	}
 
-	return createFileLogger(verbose, meta, logDir)
+	return createFileLogger(verbose, meta, logDir, logMaxSize, logMaxBackups, logMaxAge)
 }
 
-func InitDfget(verbose, console bool, dir string) error {
+func InitDfget(verbose, console bool, dir string, logMaxSize, logMaxBackups, logMaxAge int) error {
 	if console {
 		return createConsoleLogger(verbose)
 	}
@@ -142,7 +142,7 @@ func InitDfget(verbose, console bool, dir string) error {
 		},
 	}
 
-	return createFileLogger(verbose, meta, logDir)
+	return createFileLogger(verbose, meta, logDir, logMaxSize, logMaxBackups, logMaxAge)
 }
 
 func createConsoleLogger(verbose bool) error {
@@ -170,13 +170,13 @@ func createConsoleLogger(verbose bool) error {
 	return nil
 }
 
-func createFileLogger(verbose bool, meta []logInitMeta, logDir string) error {
+func createFileLogger(verbose bool, meta []logInitMeta, logDir string, logMaxSize, logMaxBackups, logMaxAge int) error {
 	levels = nil
 	// create parent dir first
 	_ = os.MkdirAll(logDir, fs.FileMode(0755))
 
 	for _, m := range meta {
-		log, level, err := CreateLogger(path.Join(logDir, m.fileName), false, false, verbose)
+		log, level, err := CreateLogger(path.Join(logDir, m.fileName), false, false, verbose, logMaxSize, logMaxBackups, logMaxAge)
 		if err != nil {
 			return err
 		}
@@ -192,7 +192,7 @@ func createFileLogger(verbose bool, meta []logInitMeta, logDir string) error {
 	return nil
 }
 
-func InitDfcache(console bool, dir string) error {
+func InitDfcache(console bool, dir string, logMaxSize, logMaxBackups, logMaxAge int) error {
 	logDir := filepath.Join(dir, types.DfcacheName)
 
 	var meta = []logInitMeta{
@@ -206,5 +206,5 @@ func InitDfcache(console bool, dir string) error {
 		},
 	}
 
-	return createFileLogger(console, meta, logDir)
+	return createFileLogger(console, meta, logDir, logMaxSize, logMaxBackups, logMaxAge)
 }

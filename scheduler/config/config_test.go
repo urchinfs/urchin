@@ -88,16 +88,19 @@ func TestConfig_Load(t *testing.T) {
 			},
 		},
 		Server: ServerConfig{
-			AdvertiseIP:   net.ParseIP("127.0.0.1"),
-			AdvertisePort: 8004,
-			ListenIP:      net.ParseIP("0.0.0.0"),
-			Port:          8002,
-			Host:          "foo",
-			WorkHome:      "foo",
-			CacheDir:      "foo",
-			LogDir:        "foo",
-			PluginDir:     "foo",
-			DataDir:       "foo",
+			AdvertiseIP:         net.ParseIP("127.0.0.1"),
+			AdvertisePort:       8004,
+			ListenIP:            net.ParseIP("0.0.0.0"),
+			Port:                8002,
+			Host:                "foo",
+			WorkHome:            "foo",
+			CacheDir:            "foo",
+			LogDir:              "foo",
+			LogRotateMaxSize:    1024,
+			LogRotateMaxBackups: 20,
+			LogRotateMaxAge:     7,
+			PluginDir:           "foo",
+			DataDir:             "foo",
 		},
 		DynConfig: DynConfig{
 			RefreshInterval: 10 * time.Second,
@@ -172,9 +175,17 @@ func TestConfig_Load(t *testing.T) {
 		},
 	}
 
+	if err := config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
 	schedulerConfigYAML := &Config{}
 	contentYAML, _ := os.ReadFile("./testdata/scheduler.yaml")
 	if err := yaml.Unmarshal(contentYAML, &schedulerConfigYAML); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := schedulerConfigYAML.Validate(); err != nil {
 		t.Fatal(err)
 	}
 

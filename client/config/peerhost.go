@@ -52,12 +52,15 @@ type DaemonOption struct {
 	GCInterval util.Duration `mapstructure:"gcInterval" yaml:"gcInterval"`
 	Metrics    string        `mapstructure:"metrics" yaml:"metrics"`
 
-	WorkHome    string `mapstructure:"workHome" yaml:"workHome"`
-	CacheDir    string `mapstructure:"cacheDir" yaml:"cacheDir"`
-	LogDir      string `mapstructure:"logDir" yaml:"logDir"`
-	PluginDir   string `mapstructure:"pluginDir" yaml:"pluginDir"`
-	DataDir     string `mapstructure:"dataDir" yaml:"dataDir"`
-	KeepStorage bool   `mapstructure:"keepStorage" yaml:"keepStorage"`
+	WorkHome            string `mapstructure:"workHome" yaml:"workHome"`
+	CacheDir            string `mapstructure:"cacheDir" yaml:"cacheDir"`
+	LogDir              string `mapstructure:"logDir" yaml:"logDir"`
+	LogRotateMaxSize    int    `mapstructure:"logRotateMaxSize" yaml:"logRotateMaxSize"`
+	LogRotateMaxBackups int    `mapstructure:"logRotateMaxBackups" yaml:"logRotateMaxBackups"`
+	LogRotateMaxAge     int    `mapstructure:"logRotateMaxAge" yaml:"logRotateMaxAge"`
+	PluginDir           string `mapstructure:"pluginDir" yaml:"pluginDir"`
+	DataDir             string `mapstructure:"dataDir" yaml:"dataDir"`
+	KeepStorage         bool   `mapstructure:"keepStorage" yaml:"keepStorage"`
 
 	Security      GlobalSecurityOption `mapstructure:"security" yaml:"security"`
 	Scheduler     SchedulerOption      `mapstructure:"scheduler" yaml:"scheduler"`
@@ -159,6 +162,18 @@ func (p *DaemonOption) Convert() error {
 }
 
 func (p *DaemonOption) Validate() error {
+	if p.LogRotateMaxSize <= 0 {
+		return fmt.Errorf("dfdaemon parameter logRotateMaxSize must be greater than 0")
+	}
+
+	if p.LogRotateMaxBackups <= 0 {
+		return fmt.Errorf("dfdaemon parameter logRotateMaxBackups must be greater than 0")
+	}
+
+	if p.LogRotateMaxAge <= 0 {
+		return fmt.Errorf("dfdaemon parameter logRotateMaxAge must be greater than 0")
+	}
+
 	if p.Scheduler.Manager.Enable {
 		if len(p.Scheduler.Manager.NetAddrs) == 0 {
 			return errors.New("manager addr is not specified")

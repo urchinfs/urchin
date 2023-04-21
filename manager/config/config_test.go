@@ -108,11 +108,14 @@ var (
 func TestConfig_Load(t *testing.T) {
 	config := &Config{
 		Server: ServerConfig{
-			Name:      "foo",
-			WorkHome:  "foo",
-			CacheDir:  "foo",
-			LogDir:    "foo",
-			PluginDir: "foo",
+			Name:                "foo",
+			WorkHome:            "foo",
+			CacheDir:            "foo",
+			LogDir:              "foo",
+			LogRotateMaxSize:    1024,
+			LogRotateMaxBackups: 20,
+			LogRotateMaxAge:     7,
+			PluginDir:           "foo",
 			GRPC: GRPCConfig{
 				AdvertiseIP:   net.IPv4zero,
 				AdvertisePort: 65003,
@@ -211,9 +214,17 @@ func TestConfig_Load(t *testing.T) {
 		},
 	}
 
+	if err := config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
 	managerConfigYAML := &Config{}
 	contentYAML, _ := os.ReadFile("./testdata/manager.yaml")
 	if err := yaml.Unmarshal(contentYAML, &managerConfigYAML); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := managerConfigYAML.Validate(); err != nil {
 		t.Fatal(err)
 	}
 

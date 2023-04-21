@@ -9,6 +9,9 @@ gcInterval: 1m0s
 workHome: /tmp/dragonfly/dfdaemon/
 cacheDir: /var/cache/dragonfly/
 logDir: /var/log/dragonfly/
+logRotateMaxSize: 1024
+logRotateMaxBackups: 20
+logRotateMaxAge: 7
 pluginDir: /tmp/dragonfly/dfdaemon/plugins/
 dataDir: /var/lib/dragonfly/
 keepStorage: false

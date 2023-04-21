@@ -247,13 +247,16 @@ func TestPeerHostOption_Load(t *testing.T) {
 		GCInterval: util.Duration{
 			Duration: 60000000000,
 		},
-		Metrics:     ":8000",
-		WorkHome:    "/tmp/dragonfly/dfdaemon/",
-		CacheDir:    "/var/cache/dragonfly/",
-		LogDir:      "/var/log/dragonfly/",
-		PluginDir:   "/tmp/dragonfly/dfdaemon/plugins/",
-		DataDir:     "/var/lib/dragonfly/",
-		KeepStorage: false,
+		Metrics:             ":8000",
+		WorkHome:            "/tmp/dragonfly/dfdaemon/",
+		CacheDir:            "/var/cache/dragonfly/",
+		LogDir:              "/var/log/dragonfly/",
+		LogRotateMaxSize:    1024,
+		LogRotateMaxBackups: 20,
+		LogRotateMaxAge:     7,
+		PluginDir:           "/tmp/dragonfly/dfdaemon/plugins/",
+		DataDir:             "/var/lib/dragonfly/",
+		KeepStorage:         false,
 		Scheduler: SchedulerOption{
 			Manager: ManagerOption{
 				Enable: false,
@@ -515,8 +518,16 @@ func TestPeerHostOption_Load(t *testing.T) {
 		},
 	}
 
+	if err := peerHostOption.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
 	peerHostOptionYAML := &DaemonOption{}
 	if err := peerHostOptionYAML.Load("./testdata/config/daemon.yaml"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := peerHostOptionYAML.Validate(); err != nil {
 		t.Fatal(err)
 	}
 

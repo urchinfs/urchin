@@ -27,13 +27,18 @@ import (
 	"d7y.io/dragonfly/v2/pkg/net/fqdn"
 	"d7y.io/dragonfly/v2/pkg/rpc"
 	"d7y.io/dragonfly/v2/pkg/types"
+
+	logger "d7y.io/dragonfly/v2/internal/dflog"
 )
 
 var peerHostConfig = func() *DaemonOption {
 	return &DaemonOption{
-		AliveTime:   util.Duration{Duration: DefaultDaemonAliveTime},
-		GCInterval:  util.Duration{Duration: DefaultGCInterval},
-		KeepStorage: false,
+		AliveTime:           util.Duration{Duration: DefaultDaemonAliveTime},
+		GCInterval:          util.Duration{Duration: DefaultGCInterval},
+		LogRotateMaxSize:    logger.DefaultRotateMaxSize,
+		LogRotateMaxBackups: logger.DefaultRotateMaxBackups,
+		LogRotateMaxAge:     logger.DefaultRotateMaxAge,
+		KeepStorage:         false,
 		Scheduler: SchedulerOption{
 			Manager: ManagerOption{
 				Enable:          false,
