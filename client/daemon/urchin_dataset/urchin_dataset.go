@@ -56,8 +56,10 @@ func CreateDataSet(ctx *gin.Context) {
 		dataSetTags   = form.Tags
 	)
 
-	if int(replica) > getConfInfo().Opt.ObjectStorage.MaxReplicas {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": "replica is large than max replicas"})
+	dataSourcesInfo := getConfInfo().Opt.ObjectStorage
+
+	if int(replica) > dataSourcesInfo.MaxReplicas {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": "replica: " + strconv.FormatUint(uint64(replica), 10) + " is large than the max datasource count of system setting: " + strconv.FormatInt(int64(dataSourcesInfo.MaxReplicas), 10)})
 		return
 	}
 
@@ -67,16 +69,16 @@ func CreateDataSet(ctx *gin.Context) {
 		return
 	}
 
-	var availableSeedPeerCnt uint = 0
+	var replicableDataSourceCnt uint = 0
 	for _, scheduler := range schedulers {
 		for _, seedPeer := range scheduler.SeedPeers {
 			if getConfInfo().Opt.Host.AdvertiseIP.String() != seedPeer.Ip && seedPeer.ObjectStoragePort > 0 {
-				availableSeedPeerCnt++
+				replicableDataSourceCnt++
 			}
 		}
 	}
-	if replica > availableSeedPeerCnt {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": "replica is large than available seed peer hosts"})
+	if replica > replicableDataSourceCnt {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": "replica: " + strconv.FormatUint(uint64(replica), 10) + " is large than replicable datasource count: " + strconv.FormatUint(uint64(replicableDataSourceCnt), 10)})
 		return
 	}
 
