@@ -860,7 +860,7 @@ func (urfm *UrchinFileManager) importFileToSeedPeers(ctx context.Context, datase
 			},
 		}
 
-		err = urchin_dataset.UpdateDataSetImpl(datasetId, "", 0, "", []string{}, urchinDataSource, urchinDataCache)
+		err = urchin_dataset.UpdateDataSetImpl(datasetId, "", "", 0, "", []string{}, urchinDataSource, urchinDataCache)
 		if err != nil {
 			log.Errorf("UpdateDataSetImpl file %s to bucket %s failed, error %s", objectKey, bucketName, err)
 			return err

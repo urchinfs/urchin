@@ -21,6 +21,7 @@ type UrchinDataSetCreateParams struct {
 }
 
 type UrchinDataSetUpdateParams struct {
+	Name          string   `form:"name" binding:"omitempty"`
 	Desc          string   `form:"desc" binding:"omitempty"`
 	Replica       uint     `form:"replica" binding:"omitempty"`
 	CacheStrategy string   `form:"cache_strategy" binding:"omitempty"`

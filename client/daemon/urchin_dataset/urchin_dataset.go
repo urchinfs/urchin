@@ -167,13 +167,14 @@ func UpdateDataSet(ctx *gin.Context) {
 
 	var (
 		dataSetID     = params.ID
+		dataSetName   = form.Name
 		dataSetDesc   = form.Desc
 		replica       = form.Replica
 		cacheStrategy = form.CacheStrategy
 		dataSetTags   = form.Tags
 	)
 
-	err := UpdateDataSetImpl(dataSetID, dataSetDesc, replica, cacheStrategy, dataSetTags, []UrchinEndpoint{}, []UrchinEndpoint{})
+	err := UpdateDataSetImpl(dataSetID, dataSetName, dataSetDesc, replica, cacheStrategy, dataSetTags, []UrchinEndpoint{}, []UrchinEndpoint{})
 	if err != nil {
 		logger.Warnf("UpdateDataSet err:%v, dataSetID:%s, dataSetDesc:%s", err, dataSetID, dataSetDesc)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
@@ -486,10 +487,10 @@ func MapToSlice(m map[string]bool) []string {
 	return s
 }
 
-func UpdateDataSetImpl(dataSetID, dataSetDesc string, replica uint, cacheStrategy string, dataSetTags []string,
+func UpdateDataSetImpl(dataSetID, dataSetName string, dataSetDesc string, replica uint, cacheStrategy string, dataSetTags []string,
 	shareBlobSources, shareBlobCaches []UrchinEndpoint) error {
-	logger.Infof("updateDataSet dataSetID:%s, desc:%s replica:%d cacheStrategy:%s tags:%v shareBlobSources:%v shareBlobCaches:%v",
-		dataSetID, dataSetDesc, replica, cacheStrategy, dataSetTags, shareBlobSources, shareBlobCaches)
+	logger.Infof("updateDataSet dataSetID:%s,name:%s desc:%s replica:%d cacheStrategy:%s tags:%v shareBlobSources:%v shareBlobCaches:%v",
+		dataSetID, dataSetName, dataSetDesc, replica, cacheStrategy, dataSetTags, shareBlobSources, shareBlobCaches)
 
 	_, err := GetDataSetImpl(dataSetID)
 	if err != nil {
@@ -499,6 +500,15 @@ func UpdateDataSetImpl(dataSetID, dataSetDesc string, replica uint, cacheStrateg
 
 	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
+
+	if len(dataSetName) > 0 {
+		err := redisClient.SetMapElement(datasetKey, "name", []byte(dataSetName))
+		if err != nil {
+			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, name:%s", err, dataSetID, dataSetName)
+			return err
+		}
+	}
+
 	if len(dataSetDesc) > 0 {
 		err := redisClient.SetMapElement(datasetKey, "desc", []byte(dataSetDesc))
 		if err != nil {
