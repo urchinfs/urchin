@@ -360,7 +360,7 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 			}
 
 			if err := urfm.importFileToSeedPeers(context.Background(), datasetId, form.DatasetVersionId, bucketName, backendBlobFileObjectKey, urlMeta.Filter, form.Digest, ReplicaBlobOS, mergedDataBlobFilePath, wantedReplicas, log); err != nil {
-				log.Errorf("backup metafile %s to datasource centers with wanted replicas: %d failed, err: %s", backendBlobFileObjectKey, wantedReplicas, err)
+				log.Errorf("backup blobFile %s to datasource centers with wanted replicas: %d failed, err: %s", backendBlobFileObjectKey, wantedReplicas, err)
 				importFileToSeedPeersSucceed <- false
 				return
 			}
