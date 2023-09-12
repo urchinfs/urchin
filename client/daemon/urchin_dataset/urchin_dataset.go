@@ -145,11 +145,17 @@ func CreateDataSet(ctx *gin.Context) {
 		}
 	}
 
-	_ = urchin_dataset_vesion.CreateDataSetVersionImpl(dataSetID, urchin_dataset_vesion.UrchinDataSetVersionInfo{
+	err = urchin_dataset_vesion.CreateDataSetVersionImpl(dataSetID, urchin_dataset_vesion.UrchinDataSetVersionInfo{
 		ID:       DefaultDatasetVersion,
 		Name:     "default dataset version",
 		CreateAt: curTime,
 	})
+
+	if err != nil {
+		logger.Warnf("create Default dataset version err:%v, dataSetID:%s", err, dataSetID)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": fmt.Sprintf("create Default dataset version err:%v, dataSetID:%s", err.Error(), dataSetID)})
+		return
+	}
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"status_code": 0,

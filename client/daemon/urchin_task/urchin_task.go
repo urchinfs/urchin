@@ -303,8 +303,8 @@ type GetTasksQuery struct {
 	DataSource      string `form:"data_source" binding:"omitempty"`
 	DataDestination string `form:"data_destination" binding:"omitempty"`
 	State           string `form:"state" binding:"omitempty,oneof=Pending Running Leave Succeeded Failed"`
-	Page            int    `form:"page" binding:"omitempty,gte=1"`
-	PerPage         int    `form:"per_page" binding:"omitempty,gte=1,lte=50"`
+	Page            int    `form:"page,default=0" binding:"omitempty,gte=1"`
+	PerPage         int    `form:"per_page,default=1" binding:"omitempty,gte=1,lte=50"`
 }
 
 func (urtm *UrchinTaskManager) setPaginationDefault(page, perPage *int) {

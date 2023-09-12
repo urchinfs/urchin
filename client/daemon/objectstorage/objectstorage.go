@@ -214,7 +214,6 @@ func (o *objectStorage) initRouter(cfg *config.DaemonOption, logDir string) *gin
 	api.GET("/datasets", urchindataset.ListDataSets)
 
 	api.POST("/dataset/:dataset_id/version", urchindatasetv.CreateDataSetVersion)
-	api.PATCH("/dataset/:dataset_id/version/:version_id", urchindatasetv.UpdateDataSetVersion)
 	api.DELETE("/dataset/:dataset_id/version/:version_id", urchindatasetv.DeleteDataSetVersion)
 	api.GET("/dataset/:dataset_id/version/:version_id", urchindatasetv.GetDataSetVersion)
 	api.GET("/dataset/:dataset_id/versions", urchindatasetv.ListDataSetVersions)
