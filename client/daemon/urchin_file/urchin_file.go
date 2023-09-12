@@ -198,7 +198,7 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 	switch DataModeJson2Enum[dataMode] {
 	case Meta:
 
-		objectKey := urfm.genBackendMetaFileObjectKey(datasetId, datasetVersionId, form.Digest)
+		metaFileObjectKey := urfm.genBackendMetaFileObjectKey(datasetId, datasetVersionId, form.Digest)
 
 		client, err := urfm.client()
 		if err != nil {
@@ -206,7 +206,7 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 			return
 		}
 
-		signURL, err := client.GetSignURL(ctx, bucketName, objectKey, objectstorage.MethodGet, defaultSignExpireTime)
+		signURL, err := client.GetSignURL(ctx, bucketName, metaFileObjectKey, objectstorage.MethodGet, defaultSignExpireTime)
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
 			return
@@ -226,10 +226,10 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 		peerID := urfm.peerIDGenerator.PeerID()
 
 		log := logger.WithTaskAndPeerID(taskID, peerID)
-		log.Infof("upload object %s meta: %s %#v", objectKey, signURL, urlMeta)
+		log.Infof("upload metafile object %s meta: %s %#v", metaFileObjectKey, signURL, urlMeta)
 
 		// Import object to local storage.
-		log.Infof("import object %s to local storage", objectKey)
+		log.Infof("import metafile object %s to local storage", metaFileObjectKey)
 		if err := urfm.importObjectToLocalStorage(ctx, taskID, peerID, fileHeader); err != nil {
 			log.Error(err)
 			ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
@@ -253,21 +253,24 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 			if err != nil {
 				return
 			}
-			if int(dataset.Replica) > maxReplicas {
-				log.Errorf("replica %d is greater than max replicas %d", dataset.Replica, maxReplicas)
+
+			wantedReplicas := int(dataset.Replica)
+
+			if wantedReplicas > maxReplicas {
+				log.Errorf("backup file %s wanted replicas: %d is large than the max datasource count of system setting: %d", wantedReplicas, maxReplicas)
 				return
 			}
 
-			if err := urfm.importObjectToSeedPeers(context.Background(), datasetId, datasetVersionId, bucketName, objectKey, urlMeta.Filter, form.Digest, ReplicaMetaOS, fileHeader, int(dataset.Replica), log); err != nil {
-				log.Errorf("import object %s to seed peers failed: %s", objectKey, err)
+			if err := urfm.importObjectToSeedPeers(context.Background(), datasetId, datasetVersionId, bucketName, metaFileObjectKey, urlMeta.Filter, form.Digest, ReplicaMetaOS, fileHeader, wantedReplicas, log); err != nil {
+				log.Errorf("backup metafile %s to datasource centers with wanted replicas: %d failed, err: %s", metaFileObjectKey, wantedReplicas, err)
 			}
 		}()
 
 		// Import object to object storage.
 		go func() {
-			log.Infof("import object %s to bucket %s", objectKey, bucketName)
-			if err := urfm.importObjectToBackend(context.Background(), urfm.config.ObjectStorage.Name, bucketName, objectKey, dgst, fileHeader, client); err != nil {
-				log.Errorf("import object %s to bucket %s failed: %s", objectKey, bucketName, err.Error())
+			log.Infof("import metafile object %s to bucket %s", metaFileObjectKey, bucketName)
+			if err := urfm.importObjectToBackend(context.Background(), urfm.config.ObjectStorage.Name, bucketName, metaFileObjectKey, dgst, fileHeader, client); err != nil {
+				log.Errorf("import metafile object %s to bucket %s failed: %s", metaFileObjectKey, bucketName, err.Error())
 				return
 			}
 		}()
@@ -317,10 +320,10 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 		peerID := urfm.peerIDGenerator.PeerID()
 
 		log := logger.WithTaskAndPeerID(taskID, peerID)
-		log.Infof("upload object %s meta: %s", backendBlobFileObjectKey, taskID)
+		log.Infof("upload blobFile object %s meta: %s", backendBlobFileObjectKey, taskID)
 
 		// Import file to local storage.
-		log.Infof("import file %s to local storage", backendBlobFileObjectKey)
+		log.Infof("import blobFile object %s to local storage", backendBlobFileObjectKey)
 		if err := urfm.importFileToLocalStorage(ctx, taskID, peerID, mergedDataBlobFilePath); err != nil {
 			log.Error(err)
 			ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
@@ -343,18 +346,21 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 
 		// Import local file to seed peer.
 		go func() {
-			log.Infof("import local blob file %s to seed-peer bucket %s", backendBlobFileObjectKey, bucketName)
+			log.Infof("backup blobFile %s to datasource center bucket %s", backendBlobFileObjectKey, bucketName)
 			dataset, err := urchin_dataset.GetDataSetImpl(datasetId)
 			if err != nil {
 				return
 			}
-			if int(dataset.Replica) > maxReplicas {
-				log.Errorf("replica %d is greater than max replicas %d", dataset.Replica, maxReplicas)
+
+			wantedReplicas := int(dataset.Replica)
+
+			if wantedReplicas > maxReplicas {
+				log.Errorf("backup blobFile %s wanted replicas: %d is large than the max datasource count of system setting: %d", backendBlobFileObjectKey, wantedReplicas, maxReplicas)
 				return
 			}
 
-			if err := urfm.importFileToSeedPeers(context.Background(), datasetId, form.DatasetVersionId, bucketName, backendBlobFileObjectKey, urlMeta.Filter, form.Digest, ReplicaBlobOS, mergedDataBlobFilePath, int(dataset.Replica), log); err != nil {
-				log.Errorf("import local blob file %s to seed peers failed: %s", backendBlobFileObjectKey, err)
+			if err := urfm.importFileToSeedPeers(context.Background(), datasetId, form.DatasetVersionId, bucketName, backendBlobFileObjectKey, urlMeta.Filter, form.Digest, ReplicaBlobOS, mergedDataBlobFilePath, wantedReplicas, log); err != nil {
+				log.Errorf("backup metafile %s to datasource centers with wanted replicas: %d failed, err: %s", backendBlobFileObjectKey, wantedReplicas, err)
 				importFileToSeedPeersSucceed <- false
 				return
 			}
@@ -811,38 +817,38 @@ func (urfm *UrchinFileManager) importFileToLocalStorage(ctx context.Context, tas
 }
 
 // importFileToSeedPeers uses to import file to available seed peers.
-func (urfm *UrchinFileManager) importFileToSeedPeers(ctx context.Context, datasetId, datasetVersionId, bucketName, objectKey, filter, digest string, mode int, sourceFilePath string, maxReplicas int, log *logger.SugaredLoggerOnWith) error {
+func (urfm *UrchinFileManager) importFileToSeedPeers(ctx context.Context, datasetId, datasetVersionId, bucketName, objectKey, filter, digest string, mode int, sourceFilePath string, wantedReplicas int, log *logger.SugaredLoggerOnWith) error {
 	seedPeerHosts, err := urfm.getSeedPeerHosts(datasetId, mode)
 	if err != nil {
 		log.Errorf("importFileToSeedPeers get seed peer hosts failed: %s", err)
 		return err
 	}
 
-	if maxReplicas > len(seedPeerHosts) {
-		log.Errorf("replica %d is greater than max replicas %d", maxReplicas, len(seedPeerHosts))
-		return fmt.Errorf("replica %d is greater than max replicas %d", maxReplicas, len(seedPeerHosts))
+	if wantedReplicas > len(seedPeerHosts) {
+		log.Errorf("wanted replicas: %d is large than the replicable datasource count: %d", wantedReplicas, len(seedPeerHosts))
+		return fmt.Errorf("wanted replicas: %d is large than the replicable datasource count: %d", wantedReplicas, len(seedPeerHosts))
 	}
 
-	var replicas int
+	var successReplicas int
 	var urchinDataCache []urchin_dataset.UrchinEndpoint
 	for _, seedPeerHost := range seedPeerHosts {
-		log.Infof("import file %s to seed peer %s", objectKey, seedPeerHost)
+		log.Infof("backup file: %s to datasource center %s", objectKey, seedPeerHost)
 		if mode == ReplicaBlobOS {
 			urchinEndpoint, err := urfm.importFileToSeedPeerWithResult(ctx, datasetId, datasetVersionId, seedPeerHost, mode, digest, sourceFilePath)
 			if err != nil {
-				log.Errorf("import file %s to seed peer %s failed: %s", objectKey, seedPeerHost, err)
+				log.Errorf("backup file %s to datasource center %s err: %s", objectKey, seedPeerHost, err)
 				continue
 			}
 			urchinDataCache = append(urchinDataCache, *urchinEndpoint)
 		} else {
 			if err := urfm.importFileToSeedPeer(ctx, seedPeerHost, bucketName, objectKey, filter, mode, sourceFilePath); err != nil {
-				log.Errorf("import file %s to seed peer %s failed: %s", objectKey, seedPeerHost, err)
+				log.Errorf("backup file %s to datasource center %s err: %s", objectKey, seedPeerHost, err)
 				continue
 			}
 		}
 
-		replicas++
-		if replicas >= maxReplicas {
+		successReplicas++
+		if successReplicas >= wantedReplicas {
 			break
 		}
 	}
@@ -867,12 +873,12 @@ func (urfm *UrchinFileManager) importFileToSeedPeers(ctx context.Context, datase
 		}
 	}
 
-	if replicas < maxReplicas {
-		log.Errorf("import replica num %d file %s to seed peers some failed", replicas, objectKey)
-		return fmt.Errorf("import replica num %d file %s to seed peers some failed", replicas, objectKey)
+	if successReplicas < wantedReplicas {
+		log.Errorf("file datasource: %s success replicas: %d, but wanted replicas is: %d, some replicas backup failed", objectKey, successReplicas, wantedReplicas)
+		return fmt.Errorf("file datasource: %s success replicas: %d but wanted replicas is: %d, some replicas backup failed", objectKey, successReplicas, wantedReplicas)
 	}
 
-	log.Infof("import %d file %s to seed peers", replicas, objectKey)
+	log.Infof("file datasource: %s success replicas: %d, backup fully", objectKey, successReplicas)
 	return nil
 }
 

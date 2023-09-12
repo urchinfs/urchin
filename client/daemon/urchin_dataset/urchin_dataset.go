@@ -8,6 +8,7 @@ import (
 	logger "d7y.io/dragonfly/v2/internal/dflog"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis"
@@ -40,6 +41,34 @@ func getConfInfo() ConfInfo {
 	return *conf
 }
 
+func validateReplica(wantedReplicas uint) error {
+
+	dataSourcesInfo := getConfInfo().Opt.ObjectStorage
+
+	if int(wantedReplicas) > dataSourcesInfo.MaxReplicas {
+		return errors.New("wanted replicas: " + strconv.FormatUint(uint64(wantedReplicas), 10) + " is large than the max datasource count of system setting: " + strconv.FormatInt(int64(dataSourcesInfo.MaxReplicas), 10))
+	}
+
+	schedulers, err := getConfInfo().DynConfig.GetSchedulers()
+	if err != nil {
+		return err
+	}
+
+	var replicableDataSourceCnt uint = 0
+	for _, scheduler := range schedulers {
+		for _, seedPeer := range scheduler.SeedPeers {
+			if getConfInfo().Opt.Host.AdvertiseIP.String() != seedPeer.Ip && seedPeer.ObjectStoragePort > 0 {
+				replicableDataSourceCnt++
+			}
+		}
+	}
+	if wantedReplicas > replicableDataSourceCnt {
+		return errors.New("wanted replicas: " + strconv.FormatUint(uint64(wantedReplicas), 10) + " is large than replicable datasource count: " + strconv.FormatUint(uint64(replicableDataSourceCnt), 10))
+	}
+
+	return nil
+}
+
 // CreateDataSet POST /api/v1/dataset
 func CreateDataSet(ctx *gin.Context) {
 	var form UrchinDataSetCreateParams
@@ -56,29 +85,8 @@ func CreateDataSet(ctx *gin.Context) {
 		dataSetTags   = form.Tags
 	)
 
-	dataSourcesInfo := getConfInfo().Opt.ObjectStorage
-
-	if int(replica) > dataSourcesInfo.MaxReplicas {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": "replica: " + strconv.FormatUint(uint64(replica), 10) + " is large than the max datasource count of system setting: " + strconv.FormatInt(int64(dataSourcesInfo.MaxReplicas), 10)})
-		return
-	}
-
-	schedulers, err := getConfInfo().DynConfig.GetSchedulers()
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
-		return
-	}
-
-	var replicableDataSourceCnt uint = 0
-	for _, scheduler := range schedulers {
-		for _, seedPeer := range scheduler.SeedPeers {
-			if getConfInfo().Opt.Host.AdvertiseIP.String() != seedPeer.Ip && seedPeer.ObjectStoragePort > 0 {
-				replicableDataSourceCnt++
-			}
-		}
-	}
-	if replica > replicableDataSourceCnt {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": "replica: " + strconv.FormatUint(uint64(replica), 10) + " is large than replicable datasource count: " + strconv.FormatUint(uint64(replicableDataSourceCnt), 10)})
+	if err := validateReplica(replica); err != nil {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": err.Error()})
 		return
 	}
 
@@ -102,7 +110,7 @@ func CreateDataSet(ctx *gin.Context) {
 	curTime := time.Now().Unix()
 	values["create_time"] = strconv.FormatInt(curTime, 10)
 	values["update_time"] = strconv.FormatInt(curTime, 10)
-	err = redisClient.SetMapElements(datasetKey, values)
+	err := redisClient.SetMapElements(datasetKey, values)
 	if err != nil {
 		logger.Warnf("CreateDataSet set map elements err:%v, dataSetID:%s", err, dataSetID)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
