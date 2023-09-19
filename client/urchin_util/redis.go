@@ -1,4 +1,4 @@
-package util
+package urchin_util
 
 import (
 	"context"

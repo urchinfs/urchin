@@ -208,6 +208,7 @@ func (s *streamTask) writeToPipe(firstPiece *PieceInfo, pw *io.PipeWriter) {
 	defer func() {
 		s.span.End()
 		s.reserveIdx = -1
+		s.reserveBuf = nil
 	}()
 	var (
 		desired int32
@@ -221,13 +222,14 @@ func (s *streamTask) writeToPipe(firstPiece *PieceInfo, pw *io.PipeWriter) {
 	)
 
 	rangeSize := int(piece.RangeSize)
-	if piece.RangeSize > PieceCacheSize {
-		s.reserveBuf = make([]byte, piece.RangeSize)
-	}
-
 	tickTimer := time.NewTicker(5 * time.Second)
 	for {
 		if desired == piece.Num || desired <= piece.OrderedNum {
+			if s.reserveBuf == nil && piece.RangeSize > PieceCacheSize {
+				rangeSize = int(piece.RangeSize)
+				s.reserveBuf = make([]byte, rangeSize)
+			}
+
 			if s.reserveIdx != -1 {
 				reader := bytes.NewReader(s.reserveBuf[s.reserveIdx:])
 				_, err := io.Copy(pw, reader)
@@ -272,6 +274,11 @@ func (s *streamTask) writeToPipe(firstPiece *PieceInfo, pw *io.PipeWriter) {
 		case <-tickTimer.C:
 			if s.reserveIdx != -1 {
 				readLen := len(s.reserveBuf) / 20
+
+				if s.reserveIdx+readLen > len(s.reserveBuf) {
+					readLen = len(s.reserveBuf) - s.reserveIdx
+				}
+
 				reader := bytes.NewReader(s.reserveBuf[s.reserveIdx : s.reserveIdx+readLen])
 				_, err := io.Copy(pw, reader)
 				if err != nil {
