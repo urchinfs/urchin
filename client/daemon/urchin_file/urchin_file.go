@@ -5,16 +5,13 @@ import (
 	"context"
 	commonv1 "d7y.io/api/pkg/apis/common/v1"
 	"d7y.io/dragonfly/v2/client/config"
-	"d7y.io/dragonfly/v2/client/daemon/urchin_dataset"
-	"d7y.io/dragonfly/v2/client/daemon/urchin_dataset_vesion"
-	"d7y.io/dragonfly/v2/client/util"
-	"encoding/json"
-	"math/rand"
-
 	"d7y.io/dragonfly/v2/client/daemon/peer"
 	"d7y.io/dragonfly/v2/client/daemon/storage"
+	"d7y.io/dragonfly/v2/client/daemon/urchin_dataset"
+	"d7y.io/dragonfly/v2/client/daemon/urchin_dataset_vesion"
 	urchinstatus "d7y.io/dragonfly/v2/client/daemon/urchin_status"
 	urchintask "d7y.io/dragonfly/v2/client/daemon/urchin_task"
+	"d7y.io/dragonfly/v2/client/urchin_util"
 	logger "d7y.io/dragonfly/v2/internal/dflog"
 	"d7y.io/dragonfly/v2/pkg/dfpath"
 	"d7y.io/dragonfly/v2/pkg/digest"
@@ -22,7 +19,7 @@ import (
 	nethttp "d7y.io/dragonfly/v2/pkg/net/http"
 	"d7y.io/dragonfly/v2/pkg/objectstorage"
 	"d7y.io/dragonfly/v2/pkg/retry"
-	pkgstrings "d7y.io/dragonfly/v2/pkg/strings"
+	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/go-http-utils/headers"
@@ -1086,36 +1083,12 @@ func (urfm *UrchinFileManager) importObjectToLocalStorage(ctx context.Context, t
 	return nil
 }
 
-func (urfm *UrchinFileManager) getAllSeedPeer() ([]string, error) {
-	var seedPeerHosts []string
-	schedulers, err := urfm.dynconfig.GetSchedulers()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, scheduler := range schedulers {
-		for _, seedPeer := range scheduler.SeedPeers {
-			if urfm.config.Host.AdvertiseIP.String() != seedPeer.Ip && seedPeer.ObjectStoragePort > 0 {
-				seedPeerHosts = append(seedPeerHosts, fmt.Sprintf("%s:%d", seedPeer.Ip, seedPeer.ObjectStoragePort))
-			}
-		}
-	}
-	seedPeerHosts = pkgstrings.Unique(seedPeerHosts)
-
-	rand.Seed(time.Now().Unix())
-	rand.Shuffle(len(seedPeerHosts), func(i, j int) {
-		seedPeerHosts[i], seedPeerHosts[j] = seedPeerHosts[j], seedPeerHosts[i]
-	})
-
-	return seedPeerHosts, nil
-}
-
 func (urfm *UrchinFileManager) makeSeedPeerHosts(datasetId string, maxReplicas, mode int) ([]string, error) {
 	if mode != ReplicaMetaOS && mode != ReplicaBlobOS {
-		return urfm.getAllSeedPeer()
+		return urchin_util.GetReplicableDataSources(urfm.dynconfig, urfm.config.Host.AdvertiseIP.String())
 	}
 
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	replicaKey := redisClient.MakeStorageKey([]string{"replica", "seed-peer", datasetId}, "")
 	exists, err := redisClient.Exists(replicaKey)
 	if err != nil {
@@ -1136,7 +1109,7 @@ func (urfm *UrchinFileManager) makeSeedPeerHosts(datasetId string, maxReplicas, 
 		return seedPeerHosts, nil
 	}
 
-	seedPeerHosts, err := urfm.getAllSeedPeer()
+	seedPeerHosts, err := urchin_util.GetReplicableDataSources(urfm.dynconfig, urfm.config.Host.AdvertiseIP.String())
 	if err != nil {
 		return nil, err
 	}
@@ -1160,10 +1133,10 @@ func (urfm *UrchinFileManager) makeSeedPeerHosts(datasetId string, maxReplicas, 
 
 func (urfm *UrchinFileManager) getSeedPeerHosts(datasetId string, mode int) ([]string, error) {
 	if mode != ReplicaMetaOS && mode != ReplicaBlobOS {
-		return urfm.getAllSeedPeer()
+		return urchin_util.GetReplicableDataSources(urfm.dynconfig, urfm.config.Host.AdvertiseIP.String())
 	}
 
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	replicaKey := redisClient.MakeStorageKey([]string{"replica", "seed-peer", datasetId}, "")
 
 	value, err := redisClient.Get(replicaKey)

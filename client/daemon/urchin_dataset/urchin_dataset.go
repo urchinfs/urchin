@@ -4,7 +4,7 @@ import (
 	"crypto/md5"
 	"d7y.io/dragonfly/v2/client/config"
 	"d7y.io/dragonfly/v2/client/daemon/urchin_dataset_vesion"
-	"d7y.io/dragonfly/v2/client/util"
+	"d7y.io/dragonfly/v2/client/urchin_util"
 	logger "d7y.io/dragonfly/v2/internal/dflog"
 	"encoding/hex"
 	"encoding/json"
@@ -49,19 +49,12 @@ func validateReplica(wantedReplicas uint) error {
 		return errors.New("wanted replicas: " + strconv.FormatUint(uint64(wantedReplicas), 10) + " is large than the max datasource count of system setting: " + strconv.FormatInt(int64(dataSourcesInfo.MaxReplicas), 10))
 	}
 
-	schedulers, err := getConfInfo().DynConfig.GetSchedulers()
+	replicableDataSources, err := urchin_util.GetReplicableDataSources(getConfInfo().DynConfig, getConfInfo().Opt.Host.AdvertiseIP.String())
 	if err != nil {
 		return err
 	}
 
-	var replicableDataSourceCnt uint = 0
-	for _, scheduler := range schedulers {
-		for _, seedPeer := range scheduler.SeedPeers {
-			if getConfInfo().Opt.Host.AdvertiseIP.String() != seedPeer.Ip && seedPeer.ObjectStoragePort > 0 {
-				replicableDataSourceCnt++
-			}
-		}
-	}
+	replicableDataSourceCnt := uint(len(replicableDataSources))
 	if wantedReplicas > replicableDataSourceCnt {
 		return errors.New("wanted replicas: " + strconv.FormatUint(uint64(wantedReplicas), 10) + " is large than replicable datasource count: " + strconv.FormatUint(uint64(replicableDataSourceCnt), 10))
 	}
@@ -91,7 +84,7 @@ func CreateDataSet(ctx *gin.Context) {
 	}
 
 	dataSetID := GetUUID()
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
 	values := make(map[string]interface{})
 	values["id"] = dataSetID
@@ -257,7 +250,7 @@ func ListDataSets(ctx *gin.Context) {
 	}
 
 	var datasets []UrchinDataSetInfo
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	if searchKey == "" {
 		if orderBy == "" {
 			var rangeLower, rangeUpper int64
@@ -412,7 +405,7 @@ func DeleteDataSet(ctx *gin.Context) {
 		dataSetID = params.ID
 	)
 
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
 
 	dataSetName, err := redisClient.GetMapElement(datasetKey, "name")
@@ -512,7 +505,7 @@ func UpdateDataSetImpl(dataSetID, dataSetName string, dataSetDesc string, replic
 		return err
 	}
 
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
 
 	if len(dataSetName) > 0 {
@@ -607,7 +600,7 @@ func GetDataSetImpl(dataSetID string) (UrchinDataSetInfo, error) {
 		return UrchinDataSetInfo{}, fmt.Errorf("dataSet ID is empty")
 	}
 
-	redisClient := util.NewRedisStorage(util.RedisClusterIP, util.RedisClusterPwd, false)
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
 	elements, err := redisClient.ReadMap(datasetKey)
 	if err != nil {
@@ -652,7 +645,7 @@ func GetDataSetImpl(dataSetID string) (UrchinDataSetInfo, error) {
 	return dataset, nil
 }
 
-func getDataSetById(dataSetID string, redisClient *util.RedisStorage) (UrchinDataSetInfo, error) {
+func getDataSetById(dataSetID string, redisClient *urchin_util.RedisStorage) (UrchinDataSetInfo, error) {
 	var dataset UrchinDataSetInfo
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
 	elements, err := redisClient.ReadMap(datasetKey)
@@ -691,7 +684,7 @@ func getDataSetById(dataSetID string, redisClient *util.RedisStorage) (UrchinDat
 	return dataset, nil
 }
 
-func WriteToTmpSet(members []string, tmpSortSetKey string, redisClient *util.RedisStorage) error {
+func WriteToTmpSet(members []string, tmpSortSetKey string, redisClient *urchin_util.RedisStorage) error {
 	for _, member := range members {
 		err := redisClient.InsertSet(tmpSortSetKey, member)
 		if err != nil {
@@ -703,7 +696,7 @@ func WriteToTmpSet(members []string, tmpSortSetKey string, redisClient *util.Red
 	return nil
 }
 
-func MatchKeysByPrefix(prefix string, matchResult map[string]bool, redisClient *util.RedisStorage) error {
+func MatchKeysByPrefix(prefix string, matchResult map[string]bool, redisClient *urchin_util.RedisStorage) error {
 	var cursor uint64
 	for {
 		members, cursor, err := redisClient.Scan(cursor, prefix, 100)
@@ -724,7 +717,7 @@ func MatchKeysByPrefix(prefix string, matchResult map[string]bool, redisClient *
 	return nil
 }
 
-func MatchZSetMemberByCreateTime(createdAtLess, createdAtGreater int64, zsetKey string, matchResult *[]string, redisClient *util.RedisStorage) error {
+func MatchZSetMemberByCreateTime(createdAtLess, createdAtGreater int64, zsetKey string, matchResult *[]string, redisClient *urchin_util.RedisStorage) error {
 	var rangeLower, rangeUpper int64
 	if createdAtLess != 0 {
 		rangeUpper = createdAtLess
@@ -757,7 +750,7 @@ func MatchZSetMemberByCreateTime(createdAtLess, createdAtGreater int64, zsetKey 
 	return nil
 }
 
-func sortAndBuildResult(orderBy string, sortBy int, pageIndex, pageSize int, sortSetKey string, redisClient *util.RedisStorage, datasets *[]UrchinDataSetInfo) error {
+func sortAndBuildResult(orderBy string, sortBy int, pageIndex, pageSize int, sortSetKey string, redisClient *urchin_util.RedisStorage, datasets *[]UrchinDataSetInfo) error {
 	if orderBy == "" {
 		orderBy = "create_time"
 	}

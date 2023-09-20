@@ -27,19 +27,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	StoragePrefix = "urchin"
-)
-
-var (
-	ErrorInvalidParameter = errors.New("invalid parameters")
-	ErrorNotExists        = errors.New("not exists")
-	ErrorNotAllowed       = errors.New("too much task, wait a moment and try again")
-	ErrorInternal         = errors.New("internal error")
-	ErrorUnknown          = errors.New("unknown error")
-	ErrorNotImplement     = errors.New("not implement")
-)
-
 // RateLimit is a wrapper for rate.Limit, support json and yaml unmarshal function
 // yaml example 1:
 // rate_limit: 2097152 # 2MiB

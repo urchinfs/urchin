@@ -335,6 +335,8 @@ func (urf *UrchinFolderManager) CacheFolder(ctx *gin.Context) {
 			defer func() {
 				defer close(coroutineLimiter)
 				defer close(moveObjResultChan)
+
+				urf.cachingFolderLock.Lock()
 				urf.cachingFolders.Delete(taskID)
 				const maxRetryCnt = 3
 				for i := 0; i < maxRetryCnt; i++ {
@@ -348,6 +350,8 @@ func (urf *UrchinFolderManager) CacheFolder(ctx *gin.Context) {
 
 					time.Sleep(time.Millisecond * 100)
 				}
+
+				urf.cachingFolderLock.Unlock()
 			}()
 
 			processStartTime := time.Now()
@@ -699,6 +703,11 @@ func (urf *UrchinFolderManager) CheckFolder(ctx *gin.Context) {
 
 	taskID := idgen.TaskIDV1(signURL, urlMeta)
 	log := logger.WithTaskID(taskID)
+
+	urf.cachingFolderLock.Lock()
+	defer func() {
+		urf.cachingFolderLock.Unlock()
+	}()
 
 	folderInfo, ok := urf.cachingFolders.Load(taskID)
 	log.Infof("checkFolder folder %s taskID %s isCaching:%v meta: %s %#v", folderKey, taskID, ok, signURL, urlMeta)
