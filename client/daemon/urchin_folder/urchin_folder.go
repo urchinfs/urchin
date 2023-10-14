@@ -306,7 +306,8 @@ func (urf *UrchinFolderManager) CacheFolder(ctx *gin.Context) {
 
 	log.Infof("cacheFolder folder %s taskID %s isCaching:%v meta: %s %#v", folderKey, taskID, ok, signURL, urlMeta)
 
-	objectNums := 0
+	//- value 0 may not be an initial value and conflicts with empty files
+	objectNums := -1
 	if !ok {
 		sourceObjs, err := sourceClient.ListFolderObjects(ctx, bucketName, folderKey)
 		if err != nil {
@@ -495,7 +496,7 @@ func (urf *UrchinFolderManager) CacheFolder(ctx *gin.Context) {
 
 	}
 
-	if objectNums == 0 {
+	if objectNums == -1 && ok {
 		objectNums = folderInfo.(CachingFolderInfo).objectNums
 	}
 
