@@ -82,18 +82,7 @@ func GetDataSetVersion(ctx *gin.Context) {
 	}
 	datasetId := uriParams.DataSetID
 	versionId := uriParams.VersionID
-	logger.Infof("parsed datasetId:%s, versionId:%s", datasetId, versionId)
-
-	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
-	dvString, err := redisClient.GetMapElement(datasetversionPrefix+datasetId, versionId)
-	if err != nil {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": err.Error()})
-		logger.Errorf("DataSetVersion Error: %s", err.Error())
-		return
-	}
-
-	dvInfo := &UrchinDataSetVersionInfo{}
-	err = json.Unmarshal([]byte(dvString), &dvInfo)
+	dvInfo, err := GetDataSetVersionImpl(datasetId, versionId)
 	if err != nil {
 		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": err.Error()})
 		logger.Errorf("DataSetVersion Error: %s", err.Error())
@@ -248,7 +237,7 @@ func ListDataSetVersions(ctx *gin.Context) {
 }
 
 func UpdateDataSetVersionImpl(datasetId, versionId string, params UrchinDataSetVersionInfo) error {
-	logger.Infof("parsed datasetId:%s, versionId:%s", datasetId, versionId)
+	logger.Infof("parsed datasetId:%s, versionId:%s, UrchinDataSetVersionInfo:%v", datasetId, versionId, params)
 	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	dvString, err := redisClient.GetMapElement(datasetversionPrefix+datasetId, versionId)
 	if err != nil {
@@ -288,4 +277,47 @@ func UpdateDataSetVersionImpl(datasetId, versionId string, params UrchinDataSetV
 	}
 
 	return nil
+}
+
+func GetDataSetVersionImpl(datasetId, versionId string) (*UrchinDataSetVersionInfo, error) {
+	logger.Infof("GetDataSetVersionImpl parsed datasetId:%s, versionId:%s", datasetId, versionId)
+
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
+	dvString, err := redisClient.GetMapElement(datasetversionPrefix+datasetId, versionId)
+	if err != nil {
+		logger.Errorf("DataSetVersion Error: %s", err.Error())
+		return nil, err
+	}
+
+	dvInfo := &UrchinDataSetVersionInfo{}
+	err = json.Unmarshal([]byte(dvString), &dvInfo)
+	if err != nil {
+		logger.Errorf("DataSetVersion Error: %s", err.Error())
+		return nil, err
+	}
+
+	return dvInfo, nil
+}
+
+func ListAllDataSetVersions(datasetId string) ([]UrchinDataSetVersionInfo, error) {
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
+	dvMap, err := redisClient.ReadMap(datasetversionPrefix + datasetId)
+	if err != nil {
+		logger.Errorf("DataSetVersion Error: %s", err.Error())
+		return nil, err
+	}
+
+	var dvList []UrchinDataSetVersionInfo
+	for _, versionInfo := range dvMap {
+		dvInfo := &UrchinDataSetVersionInfo{}
+		err = json.Unmarshal(versionInfo, &dvInfo)
+		if err != nil {
+			logger.Errorf("DataSetVersion Error: %s", err.Error())
+			return nil, err
+		}
+
+		dvList = append(dvList, *dvInfo)
+	}
+
+	return dvList, nil
 }

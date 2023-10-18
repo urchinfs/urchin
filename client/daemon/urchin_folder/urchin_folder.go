@@ -903,3 +903,50 @@ func (urf *UrchinFolderManager) deleteFolderAndFiles(ctx *gin.Context, bucketNam
 
 	return nil
 }
+
+// DestroyFolder uses to delete folder data.
+func (urf *UrchinFolderManager) DestroyFolder(ctx *gin.Context) {
+	var params FolderParams
+	if err := ctx.ShouldBindUri(&params); err != nil {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": err.Error()})
+		return
+	}
+
+	var (
+		bucketName = params.ID
+		folderKey  = strings.TrimPrefix(params.FolderKey, string(os.PathSeparator))
+	)
+
+	client, err := objectstorage.Client(urf.config.ObjectStorage.Name,
+		urf.config.ObjectStorage.Region,
+		urf.config.ObjectStorage.Endpoint,
+		urf.config.ObjectStorage.AccessKey,
+		urf.config.ObjectStorage.SecretKey)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
+		return
+	}
+
+	logger.Infof("destroy folder %s in bucket %s", folderKey, bucketName)
+	_, _, err = retry.Run(ctx, 0.05, 0.2, 3, func() (any, bool, error) {
+		_, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		if err := urf.deleteFolderAndFiles(ctx, bucketName, folderKey, client); err != nil {
+			if objectstorage.NeedRetry(err) {
+				return nil, false, err
+			}
+
+			logger.Infof("deleteFolderAndFiles failed, folderKey %s in bucket %s", folderKey, bucketName)
+			return nil, true, err
+		}
+		return nil, false, nil
+	})
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
+		return
+	}
+
+	ctx.Status(http.StatusOK)
+	return
+}

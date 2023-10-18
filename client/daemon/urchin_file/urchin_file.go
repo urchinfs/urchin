@@ -402,6 +402,8 @@ func (urfm *UrchinFileManager) UploadFile(ctx *gin.Context) {
 			isBackendOk := <-importFileToBackendSucceed
 			if !isBackendOk {
 				log.Errorf("import local blob file %s to bucket %s failed, stop delete this dataset local files", mergedDataBlobFilePath, bucketName)
+
+				_ = urfm.deleteDatasetVersionMeta(datasetId, datasetVersionId)
 				return
 			}
 
@@ -775,6 +777,16 @@ func (urfm *UrchinFileManager) importFileToBackend(ctx context.Context, bucketNa
 	if err := client.PutObject(ctx, bucketName, objectKey, dgst.String(), sourceFile); err != nil {
 		return err
 	}
+
+	folderKey, _ := path.Split(objectKey)
+	_, bExist, _ := client.GetFolderMetadata(ctx, bucketName, folderKey)
+	if !bExist {
+		err = client.CreateFolder(ctx, bucketName, folderKey, false)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -836,6 +848,8 @@ func (urfm *UrchinFileManager) importFileToSeedPeers(ctx context.Context, datase
 				log.Errorf("backup file %s to datasource center %s err: %s", objectKey, seedPeerHost, err)
 				continue
 			}
+
+			urchinEndpoint.EndpointPath, _ = path.Split(urchinEndpoint.EndpointPath)
 			urchinDataCache = append(urchinDataCache, *urchinEndpoint)
 		} else {
 			if err := urfm.importFileToSeedPeer(ctx, seedPeerHost, bucketName, objectKey, filter, mode, sourceFilePath); err != nil {
@@ -851,15 +865,17 @@ func (urfm *UrchinFileManager) importFileToSeedPeers(ctx context.Context, datase
 	}
 
 	if mode == ReplicaBlobOS {
-		configStorage, err := urfm.dynconfig.GetObjectStorage()
-		if err != nil {
-			return err
-		}
+		//configStorage, err := urfm.dynconfig.GetObjectStorage()
+		//if err != nil {
+		//	return err
+		//}
 
+		objectDir, _ := path.Split(objectKey)
 		urchinDataSource := []urchin_dataset.UrchinEndpoint{
 			{
-				Endpoint:     configStorage.Endpoint,
-				EndpointPath: bucketName + "." + objectKey,
+				//Endpoint:     configStorage.Endpoint,
+				Endpoint:     urfm.config.ObjectStorage.Endpoint,
+				EndpointPath: bucketName + "." + objectDir,
 			},
 		}
 
@@ -1049,6 +1065,15 @@ func (urfm *UrchinFileManager) importObjectToBackend(ctx context.Context, storag
 		if err := client.PutObject(ctx, bucketName, objectKey, dgst.String(), f); err != nil {
 			return err
 		}
+
+		folderKey, _ := path.Split(objectKey)
+		_, bExist, _ := client.GetFolderMetadata(ctx, bucketName, folderKey)
+		if !bExist {
+			err = client.CreateFolder(ctx, bucketName, folderKey, false)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -1176,6 +1201,7 @@ func (urfm *UrchinFileManager) importObjectToSeedPeers(ctx context.Context, data
 				log.Errorf("import object %s to seed peer %s failed: %s", objectKey, seedPeerHost, err)
 				continue
 			}
+
 			urchinMetaCache = append(urchinMetaCache, *urchinEndpoint)
 		} else {
 			if err := urfm.importObjectToSeedPeer(ctx, seedPeerHost, bucketName, objectKey, filter, mode, fileHeader); err != nil {
@@ -1191,26 +1217,21 @@ func (urfm *UrchinFileManager) importObjectToSeedPeers(ctx context.Context, data
 	}
 
 	if mode == ReplicaMetaOS {
-		configStorage, err := urfm.dynconfig.GetObjectStorage()
-		if err != nil {
-			return err
-		}
-
 		urchinMetaSource := []urchin_dataset.UrchinEndpoint{
 			{
-				Endpoint:     configStorage.Endpoint,
+				Endpoint:     urfm.config.ObjectStorage.Endpoint,
 				EndpointPath: bucketName + "." + objectKey,
 			},
 		}
 
-		metaSource, _ := json.Marshal(urchinMetaSource)
-		metaCache, _ := json.Marshal(urchinMetaCache)
+		metaSources, _ := json.Marshal(urchinMetaSource)
+		metaCaches, _ := json.Marshal(urchinMetaCache)
 
-		UrchinDataSetVersionInfo := urchin_dataset_vesion.UrchinDataSetVersionInfo{
-			MetaSources: string(metaSource),
-			MetaCaches:  string(metaCache),
+		dataSetVersionInfo := urchin_dataset_vesion.UrchinDataSetVersionInfo{
+			MetaSources: string(metaSources),
+			MetaCaches:  string(metaCaches),
 		}
-		err = urchin_dataset_vesion.UpdateDataSetVersionImpl(datasetId, datasetVersionId, UrchinDataSetVersionInfo)
+		err = urchin_dataset_vesion.UpdateDataSetVersionImpl(datasetId, datasetVersionId, dataSetVersionInfo)
 		if err != nil {
 			log.Errorf("UpdateDataSetVersionImpl file %s to bucket %s failed, error %s", objectKey, bucketName, err)
 			return err
@@ -1944,4 +1965,37 @@ func (urfm *UrchinFileManager) CheckObject(ctx *gin.Context) {
 	}
 
 	return
+}
+
+func (urfm *UrchinFileManager) deleteDatasetVersionMeta(datasetId string, versionId string) error {
+	datasetVersion, err := urchin_dataset_vesion.GetDataSetVersionImpl(datasetId, versionId)
+	if err != nil {
+		logger.Errorf("deleteDatasetVersionMeta get dataset version error, dataSetID:%s, dataSetVersion:%s, error:%v", datasetId, versionId, err)
+		return err
+	}
+
+	var metaCaches []urchin_dataset.UrchinEndpoint
+	err = json.Unmarshal([]byte(datasetVersion.MetaCaches), &metaCaches)
+	if err != nil {
+		logger.Errorf("deleteDatasetVersionMeta json unmarshal error, dataSetID:%s, dataSetVersion:%s, error:%v", datasetId, versionId, err)
+		return err
+	}
+
+	if len(metaCaches) <= 0 {
+		return nil
+	}
+
+	metaCaches = metaCaches[0 : len(metaCaches)-1]
+	metaCacheJson, _ := json.Marshal(metaCaches)
+	dataSetVersionInfo := urchin_dataset_vesion.UrchinDataSetVersionInfo{
+		MetaCaches: string(metaCacheJson),
+	}
+
+	err = urchin_dataset_vesion.UpdateDataSetVersionImpl(datasetId, versionId, dataSetVersionInfo)
+	if err != nil {
+		logger.Errorf("deleteDatasetVersionMeta update dataset version error, dataSetID:%s, dataSetVersion:%s, error:%v", datasetId, versionId, err)
+		return err
+	}
+
+	return nil
 }

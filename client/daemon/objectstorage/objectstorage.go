@@ -202,6 +202,7 @@ func (o *objectStorage) initRouter(cfg *config.DaemonOption, logDir string) *gin
 
 	b.POST(":id/cache_folder/*folder_key", o.urchinFolderManager.CacheFolder)
 	b.GET(":id/check_folder/*folder_key", o.urchinFolderManager.CheckFolder)
+	b.DELETE(":id/destroy_folder/*folder_key", o.urchinFolderManager.DestroyFolder)
 
 	api := r.Group("/api/v1")
 	api.GET("/peers", urchinpeers.GetUrchinPeers)
