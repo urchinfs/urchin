@@ -810,13 +810,13 @@ func (urf *UrchinFolderManager) moveObjectBetweenPeer(ctx *gin.Context,
 			tickTimer = time.NewTicker(60 * time.Second)
 			time.Sleep(time.Second * (4 + time.Duration(rand.Intn(3))))
 		} else if meta.ContentLength > MB_100 {
-			tickTimer = time.NewTicker(50 * time.Second)
+			tickTimer = time.NewTicker(40 * time.Second)
 			time.Sleep(time.Second * (3 + time.Duration(rand.Intn(3))))
 		} else if meta.ContentLength > MB_10 {
-			tickTimer = time.NewTicker(40 * time.Second)
+			tickTimer = time.NewTicker(30 * time.Second)
 			time.Sleep(time.Second * (2 + time.Duration(rand.Intn(3))))
 		} else {
-			tickTimer = time.NewTicker(30 * time.Second)
+			tickTimer = time.NewTicker(20 * time.Second)
 			time.Sleep(time.Second * (1 + time.Duration(rand.Intn(2))))
 		}
 	}
@@ -845,6 +845,7 @@ func (urf *UrchinFolderManager) moveObjectBetweenPeer(ctx *gin.Context,
 	if metaErr == nil && isExist {
 		if subscribeFunc != nil && unSubscribeFunc != nil && meta.ContentLength > 1024*1024*10 {
 			pieceChan := subscribeFunc()
+			needUnSubscribe := true
 		loop:
 			for {
 				select {
@@ -860,11 +861,16 @@ func (urf *UrchinFolderManager) moveObjectBetweenPeer(ctx *gin.Context,
 					}
 				case <-tickTimer.C:
 					log.Infof("pushToOwnBackend dstEndpoint %s got first piece timeout...", urf.config.ObjectStorage.Endpoint, bucketName, objectKey)
-					return errors.New("wait first package timeout")
+					needUnSubscribe = false
+					break loop
 
 				}
 			}
-			unSubscribeFunc(pieceChan)
+
+			if needUnSubscribe {
+				unSubscribeFunc(pieceChan)
+			}
+
 		} else if subscribeFunc == nil {
 			log.Infof("piece chan subscribeFunc is nil, bucket:%s-object:%s", bucketName, objectKey)
 		}
