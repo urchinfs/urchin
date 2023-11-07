@@ -1,6 +1,7 @@
 package urchin_dataset
 
 import (
+	"context"
 	"crypto/md5"
 	"d7y.io/dragonfly/v2/client/config"
 	"d7y.io/dragonfly/v2/client/daemon/urchin_dataset_vesion"
@@ -13,11 +14,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis"
 	"github.com/google/uuid"
+	"io"
 	"net/http"
+	"net/url"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	ReplicaNoScale = iota
+	ReplicaScaleUP
+	ReplicaScaleDown
+	ReplicaScaleUnknown
 )
 
 var conf *ConfInfo
@@ -99,6 +111,7 @@ func CreateDataSet(ctx *gin.Context) {
 	values["tags"] = strings.Join(dataSetTags, "_")
 	values["share_blob_sources"] = "[]"
 	values["share_blob_caches"] = "[]"
+	values["replica_state"] = ReplicaNoScale
 
 	curTime := time.Now().Unix()
 	values["create_time"] = strconv.FormatInt(curTime, 10)
@@ -494,12 +507,12 @@ func MapToSlice(m map[string]bool) []string {
 	return s
 }
 
-func UpdateDataSetImpl(dataSetID, dataSetName string, dataSetDesc string, replica uint, cacheStrategy string, dataSetTags []string,
+func UpdateDataSetImpl(dataSetID, dataSetName string, dataSetDesc string, wantedReplica uint, cacheStrategy string, dataSetTags []string,
 	shareBlobSources, shareBlobCaches []UrchinEndpoint) error {
 	logger.Infof("updateDataSet dataSetID:%s,name:%s desc:%s replica:%d cacheStrategy:%s tags:%v shareBlobSources:%v shareBlobCaches:%v",
-		dataSetID, dataSetName, dataSetDesc, replica, cacheStrategy, dataSetTags, shareBlobSources, shareBlobCaches)
+		dataSetID, dataSetName, dataSetDesc, wantedReplica, cacheStrategy, dataSetTags, shareBlobSources, shareBlobCaches)
 
-	_, err := GetDataSetImpl(dataSetID)
+	oldDatasetInfo, err := GetDataSetImpl(dataSetID)
 	if err != nil {
 		logger.Warnf("updateDataSet get dataSet err:%v, dataSetID:%s", err, dataSetID)
 		return err
@@ -507,91 +520,229 @@ func UpdateDataSetImpl(dataSetID, dataSetName string, dataSetDesc string, replic
 
 	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
 	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
-
-	if len(dataSetName) > 0 {
-		err := redisClient.SetMapElement(datasetKey, "name", []byte(dataSetName))
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, name:%s", err, dataSetID, dataSetName)
-			return err
+	updateDataSetFunc := func() error {
+		if len(dataSetName) > 0 {
+			err := redisClient.SetMapElement(datasetKey, "name", []byte(dataSetName))
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, name:%s", err, dataSetID, dataSetName)
+				return err
+			}
 		}
+
+		if len(dataSetDesc) > 0 {
+			err := redisClient.SetMapElement(datasetKey, "desc", []byte(dataSetDesc))
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, desc:%s", err, dataSetID, dataSetDesc)
+				return err
+			}
+		}
+		if wantedReplica > 0 {
+			err := redisClient.SetMapElement(datasetKey, "replica", []byte(strconv.FormatInt(int64(wantedReplica), 10)))
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, replica:%d", err, dataSetID, wantedReplica)
+				return err
+			}
+		}
+		if len(cacheStrategy) > 0 {
+			err := redisClient.SetMapElement(datasetKey, "cache_strategy", []byte(cacheStrategy))
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, cache_strategy:%d", err, dataSetID, cacheStrategy)
+				return err
+			}
+		}
+		if len(dataSetTags) > 0 {
+			oldTags, err := redisClient.GetMapElement(datasetKey, "tags")
+			if err != nil {
+				logger.Warnf("updateDataSet get map old element err:%v, dataSetID:%s, tags:%d", err, dataSetID, dataSetTags)
+				return err
+			}
+
+			oldTagsKey := redisClient.MakeStorageKey([]string{dataSetID, "match_prefix_tags", oldTags}, StoragePrefixDataset)
+			_ = redisClient.Del(oldTagsKey)
+
+			err = redisClient.SetMapElement(datasetKey, "tags", []byte(strings.Join(dataSetTags, "_")))
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, tags:%d", err, dataSetID, dataSetTags)
+				return err
+			}
+
+			formatTags := strings.Join(dataSetTags, "_")
+			datasetTagsKey := redisClient.MakeStorageKey([]string{dataSetID, "match_prefix_tags", formatTags}, StoragePrefixDataset)
+			err = redisClient.Set(datasetTagsKey, []byte(formatTags))
+			if err != nil {
+				logger.Warnf("updateDataSet set dataset tags err:%v, dataSetID:%s", err, dataSetID)
+				return err
+			}
+		}
+
+		if len(shareBlobSources) > 0 {
+			jsonBody, err := json.Marshal(shareBlobSources)
+			if err != nil {
+				logger.Warnf("updateDataSet json marshal err:%v, dataSetID:%s, shareBlobSources:%d", err, dataSetID, shareBlobSources)
+				return err
+			}
+			err = redisClient.SetMapElement(datasetKey, "share_blob_sources", jsonBody)
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, shareBlobSources:%d", err, dataSetID, shareBlobSources)
+				return err
+			}
+		}
+
+		if len(shareBlobCaches) > 0 {
+			jsonBody, err := json.Marshal(shareBlobCaches)
+			if err != nil {
+				logger.Warnf("updateDataSet json marshal err:%v, dataSetID:%s, shareBlobCaches:%d", err, dataSetID, shareBlobCaches)
+				return err
+			}
+			err = redisClient.SetMapElement(datasetKey, "share_blob_caches", jsonBody)
+			if err != nil {
+				logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, shareBlobCaches:%d", err, dataSetID, shareBlobCaches)
+				return err
+			}
+		}
+
+		curTime := time.Now().Unix()
+		_ = redisClient.SetMapElement(datasetKey, "update_time", []byte(strconv.FormatInt(curTime, 10)))
+
+		logger.Infof("updateDataSet dataSetID:%s complete", dataSetID)
+		return nil
 	}
 
-	if len(dataSetDesc) > 0 {
-		err := redisClient.SetMapElement(datasetKey, "desc", []byte(dataSetDesc))
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, desc:%s", err, dataSetID, dataSetDesc)
-			return err
+	if wantedReplica > 0 && oldDatasetInfo.Replica != wantedReplica {
+		logger.Infof("updateDataSet dataSetID:%s need adjust replica:%d num to:%d", dataSetID, oldDatasetInfo.Replica, wantedReplica)
+
+		if len(oldDatasetInfo.ShareBlobSources) < 1 {
+			logger.Errorf("dataset:%s share blob sources is valid", dataSetID)
+			return errors.New("internal error: share blob sources is valid")
 		}
+		sourceEndpoint := oldDatasetInfo.ShareBlobSources[0].Endpoint
+		sourceEndpointPath := oldDatasetInfo.ShareBlobSources[0].EndpointPath
+		sourceBucketObject := strings.SplitN(sourceEndpointPath, ".", 2)
+		if len(sourceBucketObject) < 2 {
+			logger.Errorf("share blob sources bucket %v is invalid", sourceBucketObject)
+			return errors.New("internal error: share blob sources bucket is valid")
+		}
+
+		if wantedReplica < oldDatasetInfo.Replica {
+			err := setReplicaState(dataSetID, ReplicaScaleDown)
+			if err != nil {
+				logger.Warnf("set replica state:%d failed, dataSetID:%s, error:%v", ReplicaScaleDown, dataSetID, err)
+				return err
+			}
+
+			defer func(dataSetID string, state uint) {
+				err := setReplicaState(dataSetID, state)
+				if err != nil {
+					logger.Warnf("set replica state:%d failed, dataSetID:%s, error:%v", state, dataSetID, err)
+				}
+			}(dataSetID, ReplicaNoScale)
+
+			ScaleDownReplicaHosts, err := selectScaleDownReplicaHosts(dataSetID, wantedReplica, redisClient)
+			if err != nil {
+				logger.Errorf("selectScaleDownReplicaHosts failed,  dataset:%s error:%s", dataSetID, err)
+				return err
+			}
+
+			shareBlobCaches = oldDatasetInfo.ShareBlobCaches[0:wantedReplica]
+			err = updateDataSetFunc()
+			if err != nil {
+				logger.Errorf("update dataset:%s info error:%s", dataSetID, err)
+				return err
+			}
+
+			err = scaleDownDatasetVersionInfo(dataSetID, wantedReplica)
+			if err != nil {
+				logger.Warnf("dataset:%s scale down dataset version info error:%s", dataSetID, err)
+				return err
+			}
+
+			logger.Infof("dataset:%s scale down dataset host:%v", dataSetID, ScaleDownReplicaHosts)
+			for _, replicaHost := range ScaleDownReplicaHosts {
+				err := destroySeedPeerDataset(context.Background(), dataSetID, replicaHost, sourceBucketObject[0], sourceBucketObject[1])
+				if err != nil {
+					logger.Warnf("destroySeedPeerDataset scale down replica host failed, dataSetID:%s, error:%v", dataSetID, err)
+					continue
+				}
+			}
+			logger.Infof("dataset:%s scale down dataset finish", dataSetID)
+
+		} else {
+			err := setReplicaState(dataSetID, ReplicaScaleUP)
+			if err != nil {
+				logger.Warnf("set replica state:%d failed, dataSetID:%s, error:%v", ReplicaScaleUP, dataSetID, err)
+				return err
+			}
+
+			replicaHosts, scaleUpReplicas, err := selectScaleUpReplicaHosts(dataSetID, wantedReplica, oldDatasetInfo.Replica)
+			if err != nil {
+				err = setReplicaState(dataSetID, ReplicaNoScale)
+				if err != nil {
+					logger.Warnf("set replica state:%d failed, dataSetID:%s, error:%v", ReplicaNoScale, dataSetID, err)
+				}
+
+				logger.Warnf("selectScaleUpReplicaHosts select replica hosts failed, dataSetID:%s, error:%v", dataSetID, err)
+				return err
+			}
+
+			go func() {
+				defer func(dataSetID string, state uint) {
+					err := setReplicaState(dataSetID, state)
+					if err != nil {
+						logger.Warnf("selectScaleUpReplicaHosts set replica state:%d failed, dataSetID:%s, error:%v", state, dataSetID, err)
+					}
+				}(dataSetID, ReplicaNoScale)
+
+				var scaleUpCachesEndpoint []UrchinEndpoint
+				for _, scaleUpReplica := range scaleUpReplicas {
+					var urchinEndpoint *UrchinEndpoint
+					urchinEndpoint, err = scaleUpSeedPeerDataset(context.Background(), scaleUpReplica, sourceBucketObject[0]+"."+sourceEndpoint, sourceBucketObject[1])
+					if err != nil {
+						time.Sleep(time.Second * 5)
+						urchinEndpoint, err = scaleUpSeedPeerDataset(context.Background(), scaleUpReplica, sourceBucketObject[0]+"."+sourceEndpoint, sourceBucketObject[1])
+						if err != nil {
+							logger.Warnf("scale up seed peer object error:%s, dataset:%s scale host info:%s:%S:%s", err, dataSetID, scaleUpReplica, sourceBucketObject[0]+"."+sourceEndpoint, sourceBucketObject[1])
+							return
+						}
+					}
+
+					scaleUpCachesEndpoint = append(scaleUpCachesEndpoint, *urchinEndpoint)
+				}
+
+				shareBlobCaches = oldDatasetInfo.ShareBlobCaches
+				shareBlobCaches = append(shareBlobCaches, scaleUpCachesEndpoint...)
+				err = updateDataSetFunc()
+				if err != nil {
+					logger.Warnf("dataset:%s update dataset info error:%s", dataSetID, err)
+					return
+				}
+
+				newReplicaHosts := append(replicaHosts, scaleUpReplicas...)
+				err = updateRedisReplicaInfo(dataSetID, newReplicaHosts, redisClient)
+				if err != nil {
+					logger.Warnf("dataset:%s update redis replica info error:%s", dataSetID, err)
+					return
+				}
+
+				err = scaleUpDatasetVersionInfo(dataSetID, scaleUpCachesEndpoint)
+				if err != nil {
+					logger.Warnf("dataset:%s scale up dataset version info error:%s", dataSetID, err)
+					return
+				}
+
+				logger.Infof("dataset:%s scale up dataset finish", dataSetID)
+			}()
+
+		}
+
+		return nil
 	}
-	if replica > 0 {
-		err := redisClient.SetMapElement(datasetKey, "replica", []byte(strconv.FormatInt(int64(replica), 10)))
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, replica:%d", err, dataSetID, replica)
-			return err
-		}
-	}
-	if len(cacheStrategy) > 0 {
-		err := redisClient.SetMapElement(datasetKey, "cache_strategy", []byte(cacheStrategy))
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, cache_strategy:%d", err, dataSetID, cacheStrategy)
-			return err
-		}
-	}
-	if len(dataSetTags) > 0 {
-		oldTags, err := redisClient.GetMapElement(datasetKey, "tags")
-		if err != nil {
-			logger.Warnf("updateDataSet get map old element err:%v, dataSetID:%s, tags:%d", err, dataSetID, dataSetTags)
-			return err
-		}
 
-		oldTagsKey := redisClient.MakeStorageKey([]string{dataSetID, "match_prefix_tags", oldTags}, StoragePrefixDataset)
-		_ = redisClient.Del(oldTagsKey)
-
-		err = redisClient.SetMapElement(datasetKey, "tags", []byte(strings.Join(dataSetTags, "_")))
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, tags:%d", err, dataSetID, dataSetTags)
-			return err
-		}
-
-		formatTags := strings.Join(dataSetTags, "_")
-		datasetTagsKey := redisClient.MakeStorageKey([]string{dataSetID, "match_prefix_tags", formatTags}, StoragePrefixDataset)
-		err = redisClient.Set(datasetTagsKey, []byte(formatTags))
-		if err != nil {
-			logger.Warnf("updateDataSet set dataset tags err:%v, dataSetID:%s", err, dataSetID)
-			return err
-		}
+	err = updateDataSetFunc()
+	if err != nil {
+		logger.Errorf("update dataset:%s info error:%s", dataSetID, err)
+		return err
 	}
 
-	if len(shareBlobSources) > 0 {
-		jsonBody, err := json.Marshal(shareBlobSources)
-		if err != nil {
-			logger.Warnf("updateDataSet json marshal err:%v, dataSetID:%s, shareBlobSources:%d", err, dataSetID, shareBlobSources)
-			return err
-		}
-		err = redisClient.SetMapElement(datasetKey, "share_blob_sources", jsonBody)
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, shareBlobSources:%d", err, dataSetID, shareBlobSources)
-			return err
-		}
-	}
-
-	if len(shareBlobCaches) > 0 {
-		jsonBody, err := json.Marshal(shareBlobCaches)
-		if err != nil {
-			logger.Warnf("updateDataSet json marshal err:%v, dataSetID:%s, shareBlobCaches:%d", err, dataSetID, shareBlobCaches)
-			return err
-		}
-		err = redisClient.SetMapElement(datasetKey, "share_blob_caches", jsonBody)
-		if err != nil {
-			logger.Warnf("updateDataSet set map element err:%v, dataSetID:%s, shareBlobCaches:%d", err, dataSetID, shareBlobCaches)
-			return err
-		}
-	}
-
-	curTime := time.Now().Unix()
-	_ = redisClient.SetMapElement(datasetKey, "update_time", []byte(strconv.FormatInt(curTime, 10)))
-
-	logger.Infof("updateDataSet dataSetID:%s complete", dataSetID)
 	return nil
 }
 
@@ -794,4 +945,339 @@ func sortAndBuildResult(orderBy string, sortBy int, pageIndex, pageSize int, sor
 func GetUUID() string {
 	u2 := uuid.New()
 	return u2.String()
+}
+
+// importObjectToSeedPeer uses to import objects to seed peer.
+func destroySeedPeerDataset(ctx context.Context, dataSetID, seedPeerHost, bucketName, folderKey string) error {
+	logger.Infof("destroy seedPeer host:%s dataset%s, bucketName:%s folderKey:%s", seedPeerHost, dataSetID, bucketName, folderKey)
+
+	u := url.URL{
+		Scheme: "http",
+		Host:   seedPeerHost,
+		Path:   filepath.Join("buckets", bucketName, "destroy_folder", folderKey),
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("bad response status %s", resp.Status)
+	}
+
+	return nil
+}
+
+func scaleUpSeedPeerDataset(ctx context.Context, seedPeerHost, bucketName, folderKey string) (*UrchinEndpoint, error) {
+	u := url.URL{
+		Scheme: "http",
+		Host:   seedPeerHost,
+		Path:   filepath.Join("buckets", bucketName, "cache_folder", folderKey),
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("bad response status %s", resp.Status)
+	}
+
+	var urchinEndpoint *UrchinEndpoint
+	for {
+		time.Sleep(time.Second * 3)
+
+		checkObjectStatus := func() (*UrchinEndpoint, error) {
+			u := url.URL{
+				Scheme: "http",
+				Host:   seedPeerHost,
+				Path:   filepath.Join("buckets", bucketName, "check_folder", folderKey),
+			}
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+			if err != nil {
+				return nil, err
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode/100 != 2 {
+				time.Sleep(time.Second * 2)
+				req, err = http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+				if err != nil {
+					return nil, err
+				}
+
+				resp, err = http.DefaultClient.Do(req)
+				if err != nil {
+					return nil, err
+				}
+
+				if resp.StatusCode/100 != 2 {
+					return nil, fmt.Errorf("bad response status %s", resp.Status)
+				}
+			}
+
+			respBody, _ := io.ReadAll(resp.Body)
+			var result map[string]any
+			err = json.Unmarshal(respBody, &result)
+			if err != nil {
+				return nil, err
+			}
+
+			statusCode := int(result["StatusCode"].(float64))
+			if statusCode == 1 {
+				time.Sleep(time.Second * 20)
+				return nil, nil
+			}
+
+			if statusCode != 0 {
+				return nil, fmt.Errorf("bad response status %v", result["StatusCode"])
+			}
+
+			return &UrchinEndpoint{
+				Endpoint:     result["DataEndpoint"].(string),
+				EndpointPath: result["DataRoot"].(string) + "." + result["DataPath"].(string),
+			}, nil
+
+		}
+
+		urchinEndpoint, err = checkObjectStatus()
+		if err != nil {
+			return nil, err
+		}
+
+		if urchinEndpoint == nil {
+			continue
+		}
+
+		break
+	}
+
+	return urchinEndpoint, nil
+}
+
+func containsString(src []string, dest string) bool {
+	for _, item := range src {
+		if item == dest {
+			return true
+		}
+	}
+	return false
+}
+
+func differenceSlice(src []string, dest []string) []string {
+	res := make([]string, 0)
+	for _, item := range src {
+		if !containsString(dest, item) {
+			res = append(res, item)
+		}
+	}
+	return res
+}
+
+func getReplicaHosts(dataSetID string) ([]string, error) {
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
+	replicaKey := redisClient.MakeStorageKey([]string{"replica", "seed-peer", dataSetID}, "")
+	exists, err := redisClient.Exists(replicaKey)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, errors.New("internal error: can not find dataset")
+	}
+
+	value, err := redisClient.Get(replicaKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var replicaHosts []string
+	err = json.Unmarshal(value, &replicaHosts)
+	if err != nil {
+		return nil, err
+	}
+
+	return replicaHosts, nil
+}
+
+func selectScaleUpReplicaHosts(dataSetID string, wantedReplica uint, nowReplica uint) ([]string, []string, error) {
+	replicaHosts, err := getReplicaHosts(dataSetID)
+	if err != nil {
+		logger.Warnf("getReplicaHosts get replica host failed, dataSetID:%s, error:%v", dataSetID, err)
+		return nil, nil, err
+	}
+
+	replicableDataSources, err := urchin_util.GetReplicableDataSources(getConfInfo().DynConfig, getConfInfo().Opt.Host.AdvertiseIP.String())
+	if err != nil {
+		logger.Warnf("get replicable data sources failed, dataSetID:%s, error:%v", dataSetID, err)
+		return nil, nil, err
+	}
+
+	replicableDataSourceCnt := uint(len(replicableDataSources))
+	if wantedReplica > replicableDataSourceCnt {
+		logger.Warnf("dataset:%s wanted replicas:%d is large than replicable datasource count:%d", dataSetID, wantedReplica, replicableDataSourceCnt)
+		return nil, nil, errors.New("wanted replicas: " + strconv.FormatUint(uint64(wantedReplica), 10) + " is large than replicable datasource count: " + strconv.FormatUint(uint64(replicableDataSourceCnt), 10))
+	}
+
+	scaleUpReplicas := differenceSlice(replicableDataSources, replicaHosts)[0 : wantedReplica-nowReplica]
+	logger.Infof("get replicable data sources host:%v, dataSetID:%s", scaleUpReplicas, dataSetID)
+
+	return replicaHosts, scaleUpReplicas, nil
+}
+
+func selectScaleDownReplicaHosts(dataSetID string, wantedReplica uint, redisClient *urchin_util.RedisStorage) ([]string, error) {
+	replicaHosts, err := getReplicaHosts(dataSetID)
+	if err != nil {
+		logger.Warnf("getReplicaHosts get replica info dataset:%s error:%v", dataSetID, err)
+		return nil, err
+	}
+
+	jsonBody, err := json.Marshal(replicaHosts[0:wantedReplica])
+	if err != nil {
+		logger.Warnf("json marshal failed, dataset:%s error:%v", dataSetID, err)
+		return nil, err
+	}
+
+	replicaKey := redisClient.MakeStorageKey([]string{"replica", "seed-peer", dataSetID}, "")
+	err = redisClient.Set(replicaKey, jsonBody)
+	if err != nil {
+		logger.Warnf("redis set replicaKey failed, dataset:%s jsonBody:%s error:%v", dataSetID, jsonBody, err)
+		return nil, err
+	}
+
+	ScaleDownReplicaHosts := replicaHosts[wantedReplica:]
+
+	return ScaleDownReplicaHosts, nil
+}
+
+func updateRedisReplicaInfo(dataSetID string, newReplicaHosts []string, redisClient *urchin_util.RedisStorage) error {
+	jsonBody, err := json.Marshal(newReplicaHosts)
+	if err != nil {
+		logger.Warnf("json marshal failed, dataset:%s error:%v", dataSetID, err)
+		return err
+	}
+
+	replicaKey := redisClient.MakeStorageKey([]string{"replica", "seed-peer", dataSetID}, "")
+	err = redisClient.Set(replicaKey, jsonBody)
+	if err != nil {
+		logger.Warnf("redis set replicaKey failed, dataset:%s jsonBody:%s error:%v", dataSetID, jsonBody, err)
+		return err
+	}
+
+	return nil
+}
+
+func scaleUpDatasetVersionInfo(dataSetID string, scaleUpCachesEndpoint []UrchinEndpoint) error {
+	dataSetVersions, err := urchin_dataset_vesion.ListAllDataSetVersions(dataSetID)
+	if err != nil || len(dataSetVersions) < 1 {
+		logger.Errorf("ListAllDataSetVersions failed or dataSetVersions length equal 0, dataset:%s error:%v", dataSetID, err)
+		return err
+	}
+
+	for _, versionInfo := range dataSetVersions {
+		var metaCaches []UrchinEndpoint
+		err = json.Unmarshal([]byte(versionInfo.MetaCaches), &metaCaches)
+		if err != nil {
+			logger.Errorf("json unmarshal metaCaches error, dataSetID:%s, dataSetVersion:%s, error:%v", dataSetID, versionInfo.ID, err)
+			return err
+		}
+
+		var metaSources []UrchinEndpoint
+		err = json.Unmarshal([]byte(versionInfo.MetaSources), &metaSources)
+		if err != nil {
+			logger.Errorf("json unmarshal metaSources error, dataSetID:%s, dataSetVersion:%s, error:%v", dataSetID, versionInfo.ID, err)
+			return err
+		}
+		if len(metaSources) < 1 {
+			return errors.New("dataset version meta sources is empty")
+		}
+
+		tmpScaleUpCachesEndpoint := make([]UrchinEndpoint, len(scaleUpCachesEndpoint))
+		copy(tmpScaleUpCachesEndpoint, scaleUpCachesEndpoint)
+		_, objectName := path.Split(metaSources[0].EndpointPath)
+		for idx, _ := range tmpScaleUpCachesEndpoint {
+			tmpScaleUpCachesEndpoint[idx].EndpointPath = path.Join(tmpScaleUpCachesEndpoint[idx].EndpointPath, objectName)
+		}
+
+		metaCaches = append(metaCaches, tmpScaleUpCachesEndpoint...)
+		metaCacheJson, _ := json.Marshal(metaCaches)
+		dataSetVersionInfo := urchin_dataset_vesion.UrchinDataSetVersionInfo{
+			MetaCaches: string(metaCacheJson),
+		}
+
+		err = urchin_dataset_vesion.UpdateDataSetVersionImpl(dataSetID, versionInfo.ID, dataSetVersionInfo)
+		if err != nil {
+			logger.Errorf("UpdateDataSetVersionImpl error, dataSetID:%s, dataSetVersion:%s, error:%v", dataSetID, versionInfo.ID, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func scaleDownDatasetVersionInfo(dataSetID string, wantedReplica uint) error {
+	dataSetVersions, err := urchin_dataset_vesion.ListAllDataSetVersions(dataSetID)
+	if err != nil || len(dataSetVersions) < 1 {
+		logger.Errorf("ListAllDataSetVersions failed or dataSetVersions length equal 0, dataset:%s error:%v", dataSetID, err)
+		return err
+	}
+
+	for _, versionInfo := range dataSetVersions {
+		var metaCaches []UrchinEndpoint
+		err = json.Unmarshal([]byte(versionInfo.MetaCaches), &metaCaches)
+		if err != nil {
+			logger.Errorf("json unmarshal error, dataSetID:%s, dataSetVersion:%s, error:%v", dataSetID, versionInfo.ID, err)
+			return err
+		}
+
+		if len(metaCaches) <= 0 {
+			continue
+		}
+
+		metaCaches = metaCaches[0:wantedReplica]
+		metaCacheJson, _ := json.Marshal(metaCaches)
+		dataSetVersionInfo := urchin_dataset_vesion.UrchinDataSetVersionInfo{
+			MetaCaches: string(metaCacheJson),
+		}
+
+		err = urchin_dataset_vesion.UpdateDataSetVersionImpl(dataSetID, versionInfo.ID, dataSetVersionInfo)
+		if err != nil {
+			logger.Errorf("UpdateDataSetVersionImpl error, dataSetID:%s, dataSetVersion:%s, error:%v", dataSetID, versionInfo.ID, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func setReplicaState(dataSetID string, state uint) error {
+	redisClient := urchin_util.NewRedisStorage(urchin_util.RedisClusterIP, urchin_util.RedisClusterPwd, false)
+	datasetKey := redisClient.MakeStorageKey([]string{dataSetID}, StoragePrefixDataset)
+
+	err := redisClient.SetMapElement(datasetKey, "replica_state", []byte(strconv.FormatInt(int64(state), 10)))
+	if err != nil {
+		logger.Warnf("set map element err:%v, dataSetID:%s, replica_state:%d", err, dataSetID, state)
+		return err
+	}
+
+	return nil
 }

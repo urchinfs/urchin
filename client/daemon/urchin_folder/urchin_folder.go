@@ -810,13 +810,13 @@ func (urf *UrchinFolderManager) moveObjectBetweenPeer(ctx *gin.Context,
 			tickTimer = time.NewTicker(60 * time.Second)
 			time.Sleep(time.Second * (4 + time.Duration(rand.Intn(3))))
 		} else if meta.ContentLength > MB_100 {
-			tickTimer = time.NewTicker(50 * time.Second)
+			tickTimer = time.NewTicker(40 * time.Second)
 			time.Sleep(time.Second * (3 + time.Duration(rand.Intn(3))))
 		} else if meta.ContentLength > MB_10 {
-			tickTimer = time.NewTicker(40 * time.Second)
+			tickTimer = time.NewTicker(30 * time.Second)
 			time.Sleep(time.Second * (2 + time.Duration(rand.Intn(3))))
 		} else {
-			tickTimer = time.NewTicker(30 * time.Second)
+			tickTimer = time.NewTicker(20 * time.Second)
 			time.Sleep(time.Second * (1 + time.Duration(rand.Intn(2))))
 		}
 	}
@@ -845,6 +845,7 @@ func (urf *UrchinFolderManager) moveObjectBetweenPeer(ctx *gin.Context,
 	if metaErr == nil && isExist {
 		if subscribeFunc != nil && unSubscribeFunc != nil && meta.ContentLength > 1024*1024*10 {
 			pieceChan := subscribeFunc()
+			needUnSubscribe := true
 		loop:
 			for {
 				select {
@@ -860,11 +861,16 @@ func (urf *UrchinFolderManager) moveObjectBetweenPeer(ctx *gin.Context,
 					}
 				case <-tickTimer.C:
 					log.Infof("pushToOwnBackend dstEndpoint %s got first piece timeout...", urf.config.ObjectStorage.Endpoint, bucketName, objectKey)
-					return errors.New("wait first package timeout")
+					needUnSubscribe = false
+					break loop
 
 				}
 			}
-			unSubscribeFunc(pieceChan)
+
+			if needUnSubscribe {
+				unSubscribeFunc(pieceChan)
+			}
+
 		} else if subscribeFunc == nil {
 			log.Infof("piece chan subscribeFunc is nil, bucket:%s-object:%s", bucketName, objectKey)
 		}
@@ -902,4 +908,51 @@ func (urf *UrchinFolderManager) deleteFolderAndFiles(ctx *gin.Context, bucketNam
 	}
 
 	return nil
+}
+
+// DestroyFolder uses to delete folder data.
+func (urf *UrchinFolderManager) DestroyFolder(ctx *gin.Context) {
+	var params FolderParams
+	if err := ctx.ShouldBindUri(&params); err != nil {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"errors": err.Error()})
+		return
+	}
+
+	var (
+		bucketName = params.ID
+		folderKey  = strings.TrimPrefix(params.FolderKey, string(os.PathSeparator))
+	)
+
+	client, err := objectstorage.Client(urf.config.ObjectStorage.Name,
+		urf.config.ObjectStorage.Region,
+		urf.config.ObjectStorage.Endpoint,
+		urf.config.ObjectStorage.AccessKey,
+		urf.config.ObjectStorage.SecretKey)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
+		return
+	}
+
+	logger.Infof("destroy folder %s in bucket %s", folderKey, bucketName)
+	_, _, err = retry.Run(ctx, 0.05, 0.2, 3, func() (any, bool, error) {
+		_, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		if err := urf.deleteFolderAndFiles(ctx, bucketName, folderKey, client); err != nil {
+			if objectstorage.NeedRetry(err) {
+				return nil, false, err
+			}
+
+			logger.Infof("deleteFolderAndFiles failed, folderKey %s in bucket %s", folderKey, bucketName)
+			return nil, true, err
+		}
+		return nil, false, nil
+	})
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"errors": err.Error()})
+		return
+	}
+
+	ctx.Status(http.StatusOK)
+	return
 }
